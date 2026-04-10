@@ -321,7 +321,7 @@ async function LawReaderSection({
               )}
 
               {allBabPasals.map((pasal) => (
-                <PasalBlock key={vector-pasal} pasal={pasal} pathname={pathname} pageUrl={pageUrl} />
+                <PasalBlock key={pasal.id} pasal={pasal} pathname={pathname} pageUrl={pageUrl} />
               ))}
             </section>
           );
@@ -339,7 +339,7 @@ async function LawReaderSection({
             />
           ) : (
             allPasals.map((pasal) => (
-              <PasalBlock key={vector-pasal} pasal={pasal} pathname={pathname} pageUrl={pageUrl} />
+              <PasalBlock key={pasal.id} pasal={pasal} pathname={pathname} pageUrl={pageUrl} />
             ))
           )}
         </>

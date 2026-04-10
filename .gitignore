@@ -4,9 +4,6 @@
 !.env.example
 !**/.env.example
 
-# Data (local only)
-data/
-
 # Node
 node_modules/
 .next/
