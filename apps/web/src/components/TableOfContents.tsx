@@ -37,7 +37,7 @@ function TocContent({
           const anchorId = `pasal-${pasal.number}`;
           const isActive = activeId === anchorId;
           return (
-            <li key={pasal.id}>
+            <li key={anchorId}>
               <a
                 href={`#${anchorId}`}
                 onClick={onNavigate}
@@ -89,7 +89,7 @@ function TocContent({
                   const pasalAnchorId = `pasal-${pasal.number}`;
                   const isPasalActive = activeId === pasalAnchorId;
                   return (
-                    <li key={pasal.id}>
+                    <li key={pasalAnchorId}>
                       <a
                         href={`#${pasalAnchorId}`}
                         onClick={onNavigate}
