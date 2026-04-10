@@ -18,7 +18,7 @@ const INSTALL_CMD = `claude mcp add --transport http vector-pasal ${MCP_URL}`;
 
 const CLAUDE_DESKTOP_CONFIG = `{
   "mcpServers": {
-    "vector-pasal": {
+    pasal.id: {
       "command": "npx",
       "args": ["-y", "@anthropic-ai/mcp-proxy", "https://pasal-mcp-server-production.up.railway.app/mcp"]
     }

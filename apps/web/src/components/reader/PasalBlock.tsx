@@ -22,7 +22,7 @@ interface PasalBlockProps {
 export default function PasalBlock({ pasal, pathname, pageUrl }: PasalBlockProps) {
   const t = useTranslations("reader");
   const content = pasal.content_text || "";
-  const koreksiHref = `${pathname}/koreksi/${vector-pasal}`;
+  const koreksiHref = `${pathname}/koreksi/${pasal.id}`;
 
   return (
     <article
