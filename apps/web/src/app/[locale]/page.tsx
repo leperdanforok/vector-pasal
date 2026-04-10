@@ -6,7 +6,7 @@ export default function MaintenancePage() {
       <p className="text-lg text-gray-600 max-w-md">
         Mohon maaf, kami sedang maintenante kami akan segera kembali.
       </p>
-      <p className="mt-8 text-sm font-mono text-gray-400">Status: Data Collection Phase (Caveman Mode ⚒️)</p>
+      <p className="mt-8 text-sm font-mono text-gray-400">Status: Data Collection Phase</p>
     </div>
   );
 }
