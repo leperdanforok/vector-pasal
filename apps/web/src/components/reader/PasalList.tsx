@@ -98,7 +98,7 @@ export default function PasalList({
     <>
       {pasals.map((pasal) => (
         <PasalBlock
-          key={vector-pasal}
+          key={pasal.id}
           pasal={pasal}
           pathname={pathname}
           pageUrl={pageUrl}
