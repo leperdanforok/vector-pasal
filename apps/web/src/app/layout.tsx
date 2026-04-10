@@ -25,28 +25,19 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
+// Look for the "export const metadata" section right above your code
 export const metadata: Metadata = {
-  metadataBase: new URL("https://vector-pasal"),
-  icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "48x48" },
-      { url: "/favicon.svg", type: "image/svg+xml" },
-      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
-      { url: "/favicon-16x16.png", sizes: "16x16", type: "image/png" },
-    ],
-    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180" }],
-    other: [
-      {
-        rel: "mask-icon",
-        url: "/safari-pinned-tab.svg",
-        color: "#2B6150",
-      },
-    ],
+  metadataBase: new URL("https://vectorpasal.vercel.app"),
+  title: {
+    default: "Vector Pasal — Asisten AI Perda Bolmong",
+    template: "%s | Vector Pasal",
   },
+  description: "Akses cepat Peraturan Daerah Kabupaten Bolaang Mongondow dengan asisten AI.",
   manifest: "/site.webmanifest",
   other: {
     "msapplication-TileColor": "#F8F5F0",
-    "msapplication-TileImage": "/mstile-150x150.png",
+    // If you don't have this file, you can comment this line out
+    // "msapplication-TileImage": "/mstile-150x150.png", 
   },
 };
 
