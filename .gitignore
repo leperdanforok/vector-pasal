@@ -1,0 +1,33 @@
+# Environment
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Data (local only)
+data/
+
+# Node
+node_modules/
+.next/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Supabase temp files (may contain credentials)
+supabase/.temp/
+
+# IDE / tool config
+.agent/
+.agents/
+.claude/
+.cursor/
+.vercel
+
+# OS
+.DS_Store
+Thumbs.db
+.env*.local
