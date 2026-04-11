@@ -33,24 +33,31 @@ export async function POST(req: Request) {
 
     console.log("Searching database...");
     
-    // 4. Search Supabase using our custom SQL function
+    // 4. Search Supabase using our custom SQL function (Token & Cost Optimized)
     const { data: matches, error } = await supabase.rpc('match_legal_chunks', {
       query_embedding: queryVector,
-      match_threshold: 0.5,
-      match_count: 5
+      match_threshold: 0.72, // Tighter threshold guarantees only highly relevant matches
+      match_count: 3         // Reduced to 3 to strictly minimize LLM input costs
     });
 
     if (error) throw error;
 
     if (!matches || matches.length === 0) {
-      return NextResponse.json({ 
-        answer: "Maaf, saya tidak menemukan aturan terkait pertanyaan ini di database.",
-        sources: []
+      const emptyRes = JSON.stringify({ type: 'text', data: "Menurut data Perda saat ini, aturan tersebut tidak ditemukan." }) + '\n';
+      return new Response(emptyRes, {
+        headers: { 'Content-Type': 'application/x-ndjson' }
       });
     }
 
-    // 5. Build the legal context for the AI
-    const contextText = matches.map((match: any) => `[Pasal/Bagian]: ${match.content}`).join("\n\n");
+    // 5. Build the legal context for the AI (Token Trimmed)
+    const contextText = matches.map((match: any) => {
+      // Trim extremely long chunks to prevent massive token waste, preserving context
+      const safeContent = match.content.length > 1500 
+        ? match.content.substring(0, 1500) + "... [Teks dipotong untuk efisiensi]" 
+        : match.content;
+      
+      return `[Referensi Hukum]: ${safeContent}`;
+    }).join("\n---\n");
 
     console.log("Formulating answer...");
 
@@ -70,8 +77,8 @@ export async function POST(req: Request) {
     ${query}
     `;
 
-    // New SDK Syntax for Generating Content
-    const aiResponse = await ai.models.generateContent({
+    // New SDK Syntax for Generating Content Stream
+    const stream = await ai.models.generateContentStream({
         model: 'gemini-2.5-flash',
         contents: prompt,
         config: {
@@ -80,10 +87,33 @@ export async function POST(req: Request) {
         }
     });
 
-    // 7. Send the answer AND the sources back to the frontend
-    return NextResponse.json({
-      answer: aiResponse.text, // In the new SDK, this is a property, not a function!
-      sources: matches
+    // 7. Stream the answer AND the sources back to the frontend using NDJSON
+    const encoder = new TextEncoder();
+    const readable = new ReadableStream({
+      async start(controller) {
+        // Send sources as the first chunk
+        controller.enqueue(encoder.encode(JSON.stringify({ type: 'sources', data: matches }) + '\n'));
+        
+        try {
+          for await (const chunk of stream) {
+            if (chunk.text) {
+              controller.enqueue(encoder.encode(JSON.stringify({ type: 'text', data: chunk.text }) + '\n'));
+            }
+          }
+        } catch (err) {
+          console.error("Stream error:", err);
+          controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', data: 'Error generating response' }) + '\n'));
+        }
+        
+        controller.close();
+      }
+    });
+
+    return new Response(readable, {
+      headers: {
+        'Content-Type': 'application/x-ndjson',
+        'Cache-Control': 'no-cache, no-transform',
+      }
     });
 
   } catch (error: any) {

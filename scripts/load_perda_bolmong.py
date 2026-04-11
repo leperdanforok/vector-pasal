@@ -159,7 +159,11 @@ def main():
                         
                     print(f"   -> Embedding node {node.get('node_id')}...", end=" ", flush=True)
                     
-                    vector = get_embedding(node['content'])
+                    # Inject parent context so embeddings don't suffer 'context starvation'
+                    context_prefix = f"[{metadata['title_id']}] "
+                    contextualized_text = context_prefix + node['content']
+                    
+                    vector = get_embedding(contextualized_text)
                     
                     if vector:
                         sb.table("legal_chunks").insert({
