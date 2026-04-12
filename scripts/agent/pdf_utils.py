@@ -4,14 +4,12 @@ Used by the Opus 4.6 correction agent to fetch PDF page images
 for vision-based verification of parsed text.
 """
 
-import os
+import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-load_dotenv(Path(__file__).parent.parent / ".env")
-
-from supabase import create_client
+from crawler.db import get_sb
 
 STORAGE_BUCKET = "regulation-pdfs"
 
@@ -19,17 +17,12 @@ STORAGE_BUCKET = "regulation-pdfs"
 _pdf_cache: dict[str, bytes] = {}
 
 
-_supabase_client = None
-
-
 def get_supabase():
-    """Return a reusable Supabase client (singleton)."""
-    global _supabase_client
-    if _supabase_client is None:
-        _supabase_client = create_client(
-            os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"]
-        )
-    return _supabase_client
+    """Return the shared Supabase client singleton.
+
+    Legacy alias kept for backward compatibility — delegates to ``get_sb()``.
+    """
+    return get_sb()
 
 
 def _get_pdf_bytes(slug: str) -> bytes | None:

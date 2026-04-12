@@ -23,7 +23,6 @@ from crawler.db import get_sb
 from crawler.state import claim_pending_jobs, update_status
 from loader.load_to_supabase import (
     cleanup_work_data,
-    init_supabase,
     load_nodes_by_level,
     load_nodes_recursive,
     load_work,
@@ -409,7 +408,7 @@ async def process_jobs(
 
     print(f"  Found {len(jobs)} pending jobs")
 
-    sb = init_supabase()
+    sb = get_sb()
     db = get_sb()
 
     ssl_ctx = create_ssl_context()
@@ -592,7 +591,7 @@ def reprocess_jobs(
     """
     stats = {"processed": 0, "succeeded": 0, "failed": 0, "skipped": 0}
     db = get_sb()
-    sb = init_supabase()
+    sb = get_sb()
 
     # Find loaded jobs needing re-extraction
     query = db.table("crawl_jobs").select("*").in_("status", ["loaded", "parsed", "downloaded"])

@@ -15,13 +15,9 @@ import os
 import sys
 from pathlib import Path
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv(Path(__file__).parent.parent / ".env")
-except Exception:
-    pass
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from supabase import create_client
+from crawler.db import get_sb
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "parsed"
 PROGRESS_FILE = DATA_DIR / ".load_progress.json"
@@ -53,9 +49,80 @@ def _load_reg_type_map(sb) -> dict[str, int]:
 
 
 def init_supabase():
-    url = os.environ["SUPABASE_URL"]
-    key = os.environ["SUPABASE_KEY"]
-    return create_client(url, key)
+    """Legacy alias — use ``get_sb()`` directly instead."""
+    return get_sb()
+
+
+def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
+    """Extract text from PDF, correct OCR errors, parse structure.
+
+    Shared helper used by all one-off loader scripts (load_uud.py,
+    load_perda_bolmong.py, etc.) to avoid duplicating the pipeline.
+
+    Returns a law dict compatible with ``load_work()``, or None on failure.
+    """
+    from parser.extract_pymupdf import extract_text_pymupdf
+    from parser.ocr_correct import correct_ocr_errors
+    from parser.parse_structure import parse_structure, count_pasals
+
+    text, stats = extract_text_pymupdf(pdf_path)
+    if not text or stats.get("error"):
+        print(f"   Extract failed: {stats.get('error', 'empty text')}")
+        return None
+
+    print(f"   Extracted: {stats['page_count']} pages, {stats['char_count']} chars")
+
+    text = correct_ocr_errors(text)
+    nodes = parse_structure(text)
+    pasal_count = count_pasals(nodes)
+    print(f"   Parsed: {len(nodes)} top-level nodes, {pasal_count} pasals")
+
+    return {
+        **metadata,
+        "nodes": nodes,
+        "full_text": text,
+    }
+
+
+def upsert_relationship(
+    sb,
+    source_uri: str,
+    target_uri: str,
+    rel_code: str,
+    notes: str = "",
+) -> bool:
+    """Insert or update a single work relationship by FRBR URIs.
+
+    Shared helper — all loader scripts should call this instead of
+    duplicating the fetch-work → fetch-rel-type → upsert pattern.
+
+    Returns True on success, False if either work or rel type is missing.
+    """
+    try:
+        src = sb.table("works").select("id").eq("frbr_uri", source_uri).execute()
+        tgt = sb.table("works").select("id").eq("frbr_uri", target_uri).execute()
+        if not src.data or not tgt.data:
+            print(f"  Warning: works not found for {source_uri} -> {target_uri}")
+            return False
+
+        rel_result = sb.table("relationship_types").select("id").eq("code", rel_code).execute()
+        if not rel_result.data:
+            print(f"  Warning: relationship type '{rel_code}' not found")
+            return False
+
+        sb.table("work_relationships").upsert(
+            {
+                "source_work_id": src.data[0]["id"],
+                "target_work_id": tgt.data[0]["id"],
+                "relationship_type_id": rel_result.data[0]["id"],
+                "notes": notes,
+            },
+            on_conflict="source_work_id,target_work_id,relationship_type_id",
+        ).execute()
+        return True
+    except Exception as e:
+        print(f"  Error upserting {source_uri} ->{rel_code}-> {target_uri}: {e}")
+        return False
 
 
 def load_work(sb, law: dict) -> int | None:
@@ -360,7 +427,7 @@ def main():
                         help="Count what would be inserted without writing")
     args = parser.parse_args()
 
-    sb = init_supabase()
+    sb = get_sb()
 
     if args.force_reload:
         print("Force reload: clearing ALL existing data...")
@@ -421,7 +488,7 @@ def main():
 
             # 3. Insert document nodes (FTS column auto-generates on insert)
             nodes = law.get("nodes", [])
-            pasal_nodes = load_nodes_recursive(sb, work_id, nodes)
+            pasal_nodes = load_nodes_by_level(sb, work_id, nodes)
             total_nodes += len(pasal_nodes)
             print(f"  Inserted {len(pasal_nodes)} content nodes")
 
@@ -450,53 +517,24 @@ def main():
 
 
 def insert_relationships(sb):
-    """Insert known relationships between laws."""
-    # Get work IDs by frbr_uri
-    works = sb.table("works").select("id, frbr_uri").execute().data
-    uri_to_id = {w["frbr_uri"]: w["id"] for w in works}
-
-    # Get relationship type IDs
-    rel_types = sb.table("relationship_types").select("id, code").execute().data
-    code_to_id = {r["code"]: r["id"] for r in rel_types}
-
+    """Insert known relationships between laws using shared helper."""
     relationships = [
-        # UU 6/2023 amends UU 13/2003 (Cipta Kerja amends Labor Law)
         ("/akn/id/act/uu/2023/6", "/akn/id/act/uu/2003/13", "mengubah"),
         ("/akn/id/act/uu/2003/13", "/akn/id/act/uu/2023/6", "diubah_oleh"),
-        # UU 16/2019 amends UU 1/1974 (Marriage age amendment)
         ("/akn/id/act/uu/2019/16", "/akn/id/act/uu/1974/1", "mengubah"),
         ("/akn/id/act/uu/1974/1", "/akn/id/act/uu/2019/16", "diubah_oleh"),
-        # UU 20/2001 amends UU 31/1999 (Anti-corruption amendment)
         ("/akn/id/act/uu/2001/20", "/akn/id/act/uu/1999/31", "mengubah"),
         ("/akn/id/act/uu/1999/31", "/akn/id/act/uu/2001/20", "diubah_oleh"),
-        # UU 13/2022 amends UU 12/2011 (Legislative drafting amendment)
         ("/akn/id/act/uu/2022/13", "/akn/id/act/uu/2011/12", "mengubah"),
         ("/akn/id/act/uu/2011/12", "/akn/id/act/uu/2022/13", "diubah_oleh"),
-        # UU 19/2016 amends UU 11/2008 (ITE amendment - original not in our dataset)
-        # UU 27/2024 amends UU 19/2016 (Second ITE amendment)
         ("/akn/id/act/uu/2024/27", "/akn/id/act/uu/2016/19", "mengubah"),
         ("/akn/id/act/uu/2016/19", "/akn/id/act/uu/2024/27", "diubah_oleh"),
     ]
 
     inserted = 0
     for source_uri, target_uri, rel_code in relationships:
-        source_id = uri_to_id.get(source_uri)
-        target_id = uri_to_id.get(target_uri)
-        rel_type_id = code_to_id.get(rel_code)
-
-        if not source_id or not target_id or not rel_type_id:
-            continue
-
-        try:
-            sb.table("work_relationships").insert({
-                "source_work_id": source_id,
-                "target_work_id": target_id,
-                "relationship_type_id": rel_type_id,
-            }).execute()
+        if upsert_relationship(sb, source_uri, target_uri, rel_code):
             inserted += 1
-        except Exception as e:
-            if "duplicate" not in str(e).lower():
-                print(f"  ERROR: {e}")
 
     print(f"  Inserted {inserted} relationships")
 

@@ -20,24 +20,24 @@ export async function POST(req: Request) {
     }
 
     console.log("Thinking (embedding question)...");
-    
+
     // 3. Convert the question into a 3072-dim vector (New SDK Syntax)
     const embeddingResponse = await ai.models.embedContent({
       model: 'gemini-embedding-001',
       contents: query,
     });
     if (!embeddingResponse.embeddings || embeddingResponse.embeddings.length === 0) {
-            throw new Error("Gagal membuat vector dari pertanyaan.");
+      throw new Error("Gagal membuat vector dari pertanyaan.");
     }
     const queryVector = embeddingResponse.embeddings[0].values;
 
     console.log("Searching database...");
-    
+
     // 4. Search Supabase using our custom SQL function (Token & Cost Optimized)
     const { data: matches, error } = await supabase.rpc('match_legal_chunks', {
       query_embedding: queryVector,
-      match_threshold: 0.72, // Tighter threshold guarantees only highly relevant matches
-      match_count: 3         // Reduced to 3 to strictly minimize LLM input costs
+      match_threshold: 0.5, // Remember to set 0.73 for tighter threshold guarantees only highly relevant matches
+      match_count: 5         // Reduced to 3 to strictly minimize LLM input costs
     });
 
     if (error) throw error;
@@ -52,10 +52,10 @@ export async function POST(req: Request) {
     // 5. Build the legal context for the AI (Token Trimmed)
     const contextText = matches.map((match: any) => {
       // Trim extremely long chunks to prevent massive token waste, preserving context
-      const safeContent = match.content.length > 1500 
-        ? match.content.substring(0, 1500) + "... [Teks dipotong untuk efisiensi]" 
+      const safeContent = match.content.length > 1500
+        ? match.content.substring(0, 1500) + "... [Teks dipotong untuk efisiensi]"
         : match.content;
-      
+
       return `[Referensi Hukum]: ${safeContent}`;
     }).join("\n---\n");
 
@@ -79,12 +79,12 @@ export async function POST(req: Request) {
 
     // New SDK Syntax for Generating Content Stream
     const stream = await ai.models.generateContentStream({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-            systemInstruction: systemInstruction,
-            temperature: 0.1
-        }
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        systemInstruction: systemInstruction,
+        temperature: 0.1
+      }
     });
 
     // 7. Stream the answer AND the sources back to the frontend using NDJSON
@@ -93,7 +93,7 @@ export async function POST(req: Request) {
       async start(controller) {
         // Send sources as the first chunk
         controller.enqueue(encoder.encode(JSON.stringify({ type: 'sources', data: matches }) + '\n'));
-        
+
         try {
           for await (const chunk of stream) {
             if (chunk.text) {
@@ -104,7 +104,7 @@ export async function POST(req: Request) {
           console.error("Stream error:", err);
           controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', data: 'Error generating response' }) + '\n'));
         }
-        
+
         controller.close();
       }
     });

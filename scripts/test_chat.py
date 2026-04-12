@@ -9,9 +9,9 @@ from supabase import create_client, Client
 # 1. Setup
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-# Init Supabase
+# Init Supabase — read-only operations only, anon key is sufficient
 sb_url = os.getenv("SUPABASE_URL")
-sb_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+sb_key = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_KEY")
 sb: Client = create_client(sb_url, sb_key)
 
 # Init Gemini

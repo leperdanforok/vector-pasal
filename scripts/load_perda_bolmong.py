@@ -1,82 +1,78 @@
-"""One-off local script to process UUD 1945 (3 PDFs) and load into Supabase.
+"""Batch-load Bolmong regional regulations (Perda) into Supabase.
 
-Does NOT touch crawl_jobs — completely independent of the scraper-worker.
+Scans a folder of PDFs, parses each into structured document nodes,
+generates Gemini embeddings in batches, and loads everything into
+Supabase ``document_nodes`` with FTS auto-generated.
+
+Embeddings are stored in a ``embedding`` column on ``document_nodes``
+(added by migration 056). If the column doesn't exist yet, embedding
+storage is silently skipped — FTS search still works.
 
 Usage:
-    python scripts/load_uud.py
-    python scripts/load_uud.py --dry-run   # Parse only, don't load
-    python scripts/load_uud.py --upload     # Also upload PDFs + page images to Supabase Storage
+    python scripts/load_perda_bolmong.py
+    python scripts/load_perda_bolmong.py --dry-run   # Parse only, don't load
 """
 import argparse
 import os
-import sys
 import re
+import sys
 import time
 from pathlib import Path
-from google import genai
-from google.genai import types
-
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from parser.extract_pymupdf import extract_text_pymupdf
-from parser.ocr_correct import correct_ocr_errors
-from parser.parse_structure import parse_structure, count_pasals
+from google import genai
+from google.genai import types
+
 from loader.load_to_supabase import (
-    init_supabase, load_work, cleanup_work_data,
-    load_nodes_by_level, render_page_images,
+    get_sb, process_pdf, load_work, cleanup_work_data, load_nodes_by_level,
 )
+
 PDF_DIR = Path(r"F:\Bolmong_Regulations")
 
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-def get_embedding(text: str):
-    """Converts legal text into a 768-dim vector using Gemini Embedding 001."""
-    if not text or len(text.strip()) < 5:
-        return None
-        
-    cleaned_text = " ".join(text.split())
-    
-    try:
-        result = client.models.embed_content(
-            model="models/gemini-embedding-001",
-            contents=cleaned_text,
-            config=types.EmbedContentConfig(
-                task_type="RETRIEVAL_DOCUMENT"
+# ── Batch embedding ─────────────────────────────────────────────────────────
+
+EMBEDDING_BATCH_SIZE = 100      # Gemini supports up to 100 texts per call
+EMBEDDING_MAX_RETRIES = 3
+EMBEDDING_RETRY_WAIT = [10, 30, 60]  # seconds
+
+
+def get_embeddings_batch(texts: list[str]) -> list[list[float] | None]:
+    """Generate embeddings for a batch of texts using Gemini Embedding API.
+
+    Returns a list of vectors (one per input text). Individual texts that
+    fail get ``None`` in their slot instead of crashing the whole batch.
+    Rate-limit retries are capped at EMBEDDING_MAX_RETRIES to prevent
+    infinite recursion.
+    """
+    if not texts:
+        return []
+
+    for attempt in range(EMBEDDING_MAX_RETRIES):
+        try:
+            result = client.models.embed_content(
+                model="models/gemini-embedding-001",
+                contents=texts,
+                config=types.EmbedContentConfig(
+                    task_type="RETRIEVAL_DOCUMENT"
+                ),
             )
-        )
-        return result.embeddings[0].values
-    except Exception as e:
-        print(f"Embedding Error: {e}")
-        # If you hit the 60 requests per minute limit
-        if "429" in str(e):
-            print("Rate limit hit, sleeping for 10s...")
-            time.sleep(10)
-            return get_embedding(text)
-        return None
+            return [e.values for e in result.embeddings]
+        except Exception as e:
+            if "429" in str(e) and attempt < EMBEDDING_MAX_RETRIES - 1:
+                wait = EMBEDDING_RETRY_WAIT[attempt]
+                print(f"   Rate limit hit, waiting {wait}s (attempt {attempt + 1})...")
+                time.sleep(wait)
+            else:
+                print(f"   Embedding batch error: {e}")
+                return [None] * len(texts)
 
-def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
-    """Extract text from PDF, correct OCR errors, parse structure."""
-    text, stats = extract_text_pymupdf(pdf_path)
-    if not text or stats.get("error"):
-        print(f"   Extract failed: {stats.get('error', 'empty text')}")
-        return None
+    return [None] * len(texts)
 
-    print(f"   Extracted: {stats['page_count']} pages, {stats['char_count']} chars")
 
-    text = correct_ocr_errors(text)
-    nodes = parse_structure(text)
-    pasal_count = count_pasals(nodes)
-    print(f"   Parsed: {len(nodes)} top-level nodes, {pasal_count} pasals")
-
-    return {
-        **metadata,
-        "nodes": nodes,
-        "full_text": text,
-        "source_url": "Local Upload", 
-    }
+# ── Main ────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Process Bolmong Regulations")
@@ -91,16 +87,16 @@ def main():
         print("No PDFs found! Check your folder path.")
         return
 
-    sb = None if args.dry_run else init_supabase()
-    
+    sb = None if args.dry_run else get_sb()
+
     for pdf_path in pdf_files:
-        # --- NEW METADATA LOGIC ---
+        # --- Metadata from filename ---
         filename_upper = pdf_path.stem.upper()
-        
+
         # Extract Year (Looks for 20xx)
         year_match = re.search(r'(20\d{2})', filename_upper)
         year = int(year_match.group(1)) if year_match else 2024
-        
+
         # Map Regulation Type
         reg_type = "PERDA_KAB"
         if "PROV" in filename_upper:
@@ -117,74 +113,92 @@ def main():
 
         metadata = {
             "type": reg_type,
-            "number": "00", 
+            "number": "00",
             "year": year,
             "title_id": pdf_path.stem.replace("_", " ").title(),
             "status": "berlaku",
             "slug": slug,
-            "frbr_uri": frbr_uri
+            "frbr_uri": frbr_uri,
+            "source_url": "Local Upload",
         }
-        # --- END METADATA LOGIC ---
 
-        # 2. Extract and Parse
+        # 2. Extract and Parse (uses shared process_pdf)
         result = process_pdf(pdf_path, metadata=metadata)
         if not result or args.dry_run:
             continue
 
-        # 3. Load into Supabase
+        # 3. Load into Supabase (document_nodes with auto-generated FTS)
         if sb:
             print(f"   Loading into Supabase...")
             work_id = load_work(sb, result)
-            if work_id:
-                cleanup_work_data(sb, work_id)
-                # Returns the list of nodes
-                saved_nodes = load_nodes_by_level(sb, work_id, result["nodes"])
-                
-                print(f"Generating Embeddings for {len(saved_nodes)} nodes...")
-                
+            if not work_id:
+                print(f"   FAILED to create work for {pdf_path.name}")
+                continue
+
+            cleanup_work_data(sb, work_id)
+            saved_nodes = load_nodes_by_level(sb, work_id, result["nodes"])
+            print(f"   Inserted {len(saved_nodes)} nodes into document_nodes (FTS auto-generated)")
+
+            # 4. Generate embeddings in batches and store them
+            #    Filter to content-bearing nodes with enough text
+            embeddable = [
+                n for n in saved_nodes
+                if n.get("content")
+                and len(n["content"].strip()) >= 20
+                and n.get("node_type") not in ("root", "bab")
+            ]
+
+            if embeddable:
+                print(f"   Generating embeddings for {len(embeddable)} nodes in batches of {EMBEDDING_BATCH_SIZE}...")
+
                 success_count = 0
-                skip_count = 0
-                
-                for node in saved_nodes:
-                
-                    # 1. Skip nodes with empty or tiny text
-                    if not node.get('content') or len(node['content'].strip()) < 5:
-                        skip_count += 1
-                        continue
-                        
-                    # 2. Skip structural headers
-                    if node.get('node_type') in ['root', 'bab']:
-                        skip_count += 1
-                        continue
-                        
-                    print(f"   -> Embedding node {node.get('node_id')}...", end=" ", flush=True)
-                    
-                    # Inject parent context so embeddings don't suffer 'context starvation'
+                skip_count = len(saved_nodes) - len(embeddable)
+
+                # Process in batches
+                for batch_start in range(0, len(embeddable), EMBEDDING_BATCH_SIZE):
+                    batch = embeddable[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
+
+                    # Contextualize: prepend law title for better embedding quality
                     context_prefix = f"[{metadata['title_id']}] "
-                    contextualized_text = context_prefix + node['content']
-                    
-                    vector = get_embedding(contextualized_text)
-                    
-                    if vector:
-                        sb.table("legal_chunks").insert({
-                            "work_id": work_id,
-                            "node_id": node['node_id'],
-                            "content": node['content'],
-                            "embedding": vector,
-                            "metadata": {
-                                "type": metadata["type"],
-                                "year": metadata["year"],
-                                "node_type": node['node_type']
-                            }
-                        }).execute()
-                        print("Saved!")
-                        success_count += 1
-                        
-                        time.sleep(0.1) 
-                    else:
-                        print("Vector returned empty")
-                        
-                print(f" Done! Saved: {success_count} | Skipped: {skip_count}")
+                    texts = [context_prefix + n["content"] for n in batch]
+
+                    vectors = get_embeddings_batch(texts)
+
+                    # Batch-update document_nodes with embeddings
+                    updates = []
+                    for node, vector in zip(batch, vectors):
+                        if vector is not None:
+                            updates.append({
+                                "node_id": node["node_id"],
+                                "embedding": vector,
+                            })
+
+                    if updates:
+                        # Try batch update via individual calls (Supabase SDK
+                        # doesn't support batch UPDATE by different IDs in one call)
+                        for upd in updates:
+                            try:
+                                sb.table("document_nodes").update(
+                                    {"embedding": upd["embedding"]}
+                                ).eq("id", upd["node_id"]).execute()
+                                success_count += 1
+                            except Exception as e:
+                                # Column might not exist yet — skip silently
+                                if "embedding" in str(e).lower() and "column" in str(e).lower():
+                                    print(f"   Note: 'embedding' column not found — skipping vector storage.")
+                                    print(f"         FTS search still works. Run migration 056 to enable embeddings.")
+                                    break
+                                print(f"   Embedding update error for node {upd['node_id']}: {e}")
+
+                    batch_end = min(batch_start + EMBEDDING_BATCH_SIZE, len(embeddable))
+                    print(f"   -> Batch {batch_start // EMBEDDING_BATCH_SIZE + 1}: "
+                          f"embedded {batch_end}/{len(embeddable)}")
+
+                    # Small delay between batches to stay well under rate limits
+                    if batch_start + EMBEDDING_BATCH_SIZE < len(embeddable):
+                        time.sleep(1)
+
+                print(f"   Done! Embedded: {success_count} | Skipped: {skip_count}")
 
     print("\n=== All Bolmong files processed ===")
 

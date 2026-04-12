@@ -12,13 +12,11 @@ import json
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
-
 sys.path.insert(0, str(Path(__file__).parent))
 
 from loader.load_to_supabase import (
-    init_supabase, load_work, cleanup_work_data, load_nodes_by_level
+    get_sb, load_work, cleanup_work_data, load_nodes_by_level,
+    upsert_relationship,
 )
 from parser.parse_structure import parse_structure, count_pasals
 
@@ -41,49 +39,15 @@ def reparse_from_full_text(law: dict) -> list[dict]:
 
 def insert_uu6_relationships(sb):
     """Insert bidirectional relationships between UU 6/2023 and UU 13/2003."""
-    # Fetch relationship type IDs
-    rel_result = sb.table("relationship_types").select("id, code").execute()
-    rel_map = {r["code"]: r["id"] for r in rel_result.data}
-
-    if "mengubah" not in rel_map or "diubah_oleh" not in rel_map:
-        print("  Warning: relationship types 'mengubah' or 'diubah_oleh' not found")
-        return 0
-
-    # Fetch work IDs by frbr_uri
-    try:
-        uu6 = sb.table("works").select("id").eq("frbr_uri", "/akn/id/act/uu/2023/6").single().execute()
-        uu13 = sb.table("works").select("id").eq("frbr_uri", "/akn/id/act/uu/2003/13").single().execute()
-    except Exception as e:
-        print(f"  Warning: failed to fetch work IDs: {e}")
-        return 0
-
-    if not uu6.data or not uu13.data:
-        print("  Warning: UU 6/2023 or UU 13/2003 not found in database")
-        return 0
-
-    # Upsert bidirectional relationship
-    relationships = [
-        (uu6.data["id"], uu13.data["id"], rel_map["mengubah"], "UU 6/2023 mengubah UU 13/2003"),
-        (uu13.data["id"], uu6.data["id"], rel_map["diubah_oleh"], "UU 13/2003 diubah oleh UU 6/2023"),
+    pairs = [
+        ("/akn/id/act/uu/2023/6", "/akn/id/act/uu/2003/13", "mengubah", "UU 6/2023 mengubah UU 13/2003"),
+        ("/akn/id/act/uu/2003/13", "/akn/id/act/uu/2023/6", "diubah_oleh", "UU 13/2003 diubah oleh UU 6/2023"),
     ]
-
     count = 0
-    for src_id, tgt_id, rel_type_id, desc in relationships:
-        try:
-            sb.table("work_relationships").upsert(
-                {
-                    "source_work_id": src_id,
-                    "target_work_id": tgt_id,
-                    "relationship_type_id": rel_type_id,
-                    "notes": desc,
-                },
-                on_conflict="source_work_id,target_work_id,relationship_type_id",
-            ).execute()
+    for source_uri, target_uri, rel_code, notes in pairs:
+        if upsert_relationship(sb, source_uri, target_uri, rel_code, notes):
+            print(f"  \u2713 {notes}")
             count += 1
-            print(f"  ✓ {desc}")
-        except Exception as e:
-            print(f"  Error inserting relationship: {e}")
-
     return count
 
 
@@ -124,7 +88,7 @@ def main():
         return 0
 
     # Initialize Supabase client
-    sb = init_supabase()
+    sb = get_sb()
 
     # 1. Upsert work metadata (idempotent on frbr_uri)
     print("\n--- Upserting work metadata ---")

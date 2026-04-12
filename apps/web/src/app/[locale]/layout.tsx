@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     apple: "/icon.png",
   },
   openGraph: {
-    title: "Vector Pasal | Satpol PP Bolmong",
+    title: "Vector Pasal | Satpol PP Bolaang Mongondow",
     description: "AI Perda Assistant",
     type: "website",
   },

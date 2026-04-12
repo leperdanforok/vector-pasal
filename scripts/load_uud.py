@@ -8,21 +8,14 @@ Usage:
     python scripts/load_uud.py --upload     # Also upload PDFs + page images to Supabase Storage
 """
 import argparse
-import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-load_dotenv(Path(__file__).parent / ".env")
-
 sys.path.insert(0, str(Path(__file__).parent))
 
-from parser.extract_pymupdf import extract_text_pymupdf
-from parser.ocr_correct import correct_ocr_errors
-from parser.parse_structure import parse_structure, count_pasals
 from loader.load_to_supabase import (
-    init_supabase, load_work, cleanup_work_data,
-    load_nodes_by_level, render_page_images,
+    get_sb, process_pdf, load_work, cleanup_work_data,
+    load_nodes_by_level, render_page_images, upsert_relationship,
 )
 
 PDF_DIR = Path(__file__).parent.parent / "data" / "raw" / "pdfs"
@@ -79,63 +72,14 @@ UUD_RELATIONSHIPS = [
 ]
 
 
-def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
-    """Extract text from PDF, correct OCR errors, parse structure.
-
-    Returns a law dict compatible with load_work, or None on failure.
-    """
-    text, stats = extract_text_pymupdf(pdf_path)
-    if not text or stats.get("error"):
-        print(f"  Extract failed: {stats.get('error', 'empty text')}")
-        return None
-
-    print(f"  Extracted: {stats['page_count']} pages, {stats['char_count']} chars")
-
-    text = correct_ocr_errors(text)
-    nodes = parse_structure(text)
-    pasal_count = count_pasals(nodes)
-    print(f"  Parsed: {len(nodes)} top-level nodes, {pasal_count} pasals")
-
-    return {
-        **metadata,
-        "nodes": nodes,
-        "full_text": text,
-        "source_url": "https://peraturan.go.id/id/uud-1945",
-    }
-
 
 def insert_relationships(sb) -> int:
-    """Insert work_relationships for the 3 UUD works."""
-    rel_result = sb.table("relationship_types").select("id, code").execute()
-    rel_map = {r["code"]: r["id"] for r in rel_result.data}
-
+    """Insert work_relationships for the 3 UUD works using shared helper."""
     count = 0
     for source_uri, target_uri, rel_code in UUD_RELATIONSHIPS:
-        rel_type_id = rel_map.get(rel_code)
-        if not rel_type_id:
-            print(f"  Warning: relationship type '{rel_code}' not found")
-            continue
-
-        src = sb.table("works").select("id").eq("frbr_uri", source_uri).execute()
-        tgt = sb.table("works").select("id").eq("frbr_uri", target_uri).execute()
-        if not src.data or not tgt.data:
-            print(f"  Warning: works not found for {source_uri} -> {target_uri}")
-            continue
-
-        try:
-            sb.table("work_relationships").upsert(
-                {
-                    "source_work_id": src.data[0]["id"],
-                    "target_work_id": tgt.data[0]["id"],
-                    "relationship_type_id": rel_type_id,
-                    "notes": "UUD 1945 amendment relationship",
-                },
-                on_conflict="source_work_id,target_work_id,relationship_type_id",
-            ).execute()
+        if upsert_relationship(sb, source_uri, target_uri, rel_code, "UUD 1945 amendment relationship"):
             count += 1
-        except Exception as e:
-            print(f"  Error inserting {rel_code}: {e}")
-
+            print(f"  \u2713 {source_uri} -{rel_code}-> {target_uri}")
     return count
 
 
@@ -186,7 +130,7 @@ def main():
             print(f"  PDF not found: {pdf_path}")
             continue
 
-        result = process_pdf(pdf_path, metadata=entry["metadata"])
+        result = process_pdf(pdf_path, metadata={**entry["metadata"], "source_url": "https://peraturan.go.id/id/uud-1945"})
         if not result:
             print(f"  FAILED to parse")
             continue
@@ -206,7 +150,7 @@ def main():
 
     # Load into DB
     print("\n=== Loading into Supabase ===")
-    sb = init_supabase()
+    sb = get_sb()
     work_ids = []
 
     for entry, result in results:

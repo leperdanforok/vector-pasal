@@ -46,10 +46,7 @@ def correct_ocr_errors(text: str) -> str:
     Returns corrected text.
     """
     for pattern, replacement in _OCR_PATTERNS:
-        if callable(replacement):
-            text = pattern.sub(replacement, text)
-        else:
-            text = pattern.sub(replacement, text)
+        text = pattern.sub(replacement, text)
 
     # Collapse runs of blank lines
     text = re.sub(r'\n{3,}', '\n\n', text)

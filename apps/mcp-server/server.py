@@ -109,14 +109,13 @@ def _get_law_count() -> int:
 
 
 def _with_disclaimer(result: dict | list) -> dict | list:
-    """Append legal disclaimer to every tool response."""
+    """Append legal disclaimer to every tool response.
+
+    Returns a shallow copy — cached originals are never mutated.
+    """
     if isinstance(result, dict):
-        result["disclaimer"] = DISCLAIMER
-        return result
-    for item in result:
-        if isinstance(item, dict):
-            item["disclaimer"] = DISCLAIMER
-    return result
+        return {**result, "disclaimer": DISCLAIMER}
+    return [{**item, "disclaimer": DISCLAIMER} if isinstance(item, dict) else item for item in result]
 
 
 def _no_results_message(context: str) -> str:
