@@ -15,32 +15,80 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { query } = body;
 
-    if (!query) {
-      return NextResponse.json({ error: "Pertanyaan tidak boleh kosong." }, { status: 400 });
-    }
+    console.log("Refining search query...");
 
-    console.log("Thinking (embedding question)...");
+    // 3. User Query Refinement (Fix typos like "smpah" -> "sampah" and extract keywords)
+    const refinementPrompt = `
+    Tugas: Ubah pertanyaan warga berikut menjadi kata kunci pencarian hukum yang bersih.
+    - Perbaiki Saltik (typo).
+    - Ambil hanya subjek, tindakan, dan objeknya.
+    - Hilangkan kata tanya (berapa, apa, bagaimana).
+    - Output HANYA kata kunci utama, tanpa penjelasan.
 
-    // 3. Convert the question into a 3072-dim vector (New SDK Syntax)
+    Contoh: "denda mksimal membuang smpah di sungai" -> "denda membuang sampah sungai"
+    
+    Pertanyaan: "${query}"
+    `;
+
+    const refinementResult = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: refinementPrompt,
+      config: { temperature: 0 }
+    });
+    const refinedQuery = refinementResult.text?.trim() || query;
+    console.log(`Refined Query: ["${query}"] -> ["${refinedQuery}"]`);
+
+    console.log("Thinking (embedding refined question)...");
+
     const embeddingResponse = await ai.models.embedContent({
       model: 'gemini-embedding-001',
-      contents: query,
+      contents: refinedQuery,
+      config: {
+        outputDimensionality: 768,
+        taskType: 'RETRIEVAL_QUERY',
+      }
     });
-    if (!embeddingResponse.embeddings || embeddingResponse.embeddings.length === 0) {
+
+    if (!embeddingResponse.embeddings || embeddingResponse.embeddings.length === 0 || !embeddingResponse.embeddings[0].values) {
       throw new Error("Gagal membuat vector dari pertanyaan.");
     }
-    const queryVector = embeddingResponse.embeddings[0].values;
+    const queryVector = embeddingResponse.embeddings[0].values.slice(0, 768);
 
-    console.log("Searching database...");
+    console.log("Searching database using Hybrid Strategy...");
 
-    // 4. Search Supabase using our custom SQL function (Token & Cost Optimized)
-    const { data: matches, error } = await supabase.rpc('match_legal_chunks', {
-      query_embedding: queryVector,
-      match_threshold: 0.5, // Remember to set 0.73 for tighter threshold guarantees only highly relevant matches
-      match_count: 5         // Reduced to 3 to strictly minimize LLM input costs
+    // 4. Hybrid Search: Vector + FTS/Trigram
+    // Using the refined query ensures FTS catches exact match despite typos in the original.
+    const [vectorResults, ftsResults] = await Promise.all([
+      supabase.rpc('match_legal_chunks', {
+        query_embedding: queryVector,
+        match_threshold: 0.1, // Very lenient — let the LLM decide relevance
+        match_count: 10
+      }),
+      supabase.rpc('search_legal_chunks', {
+        query_text: refinedQuery,
+        match_count: 13
+      })
+    ]);
+
+    if (vectorResults.error) throw vectorResults.error;
+    if (ftsResults.error) throw ftsResults.error;
+
+    // Merge and deduplicate by node ID
+    const seenIds = new Set<number>();
+    const matches: any[] = [];
+
+    // Prioritize vector results but supplement with FTS/Trigram results
+    [...(vectorResults.data || []), ...(ftsResults.data || [])].forEach((match: any) => {
+      const id = match.node_id || match.id;
+      if (id && !seenIds.has(id)) {
+        seenIds.add(id);
+        matches.push({
+          ...match,
+          id, // unify ID field
+        });
+      }
     });
 
-    if (error) throw error;
 
     if (!matches || matches.length === 0) {
       const emptyRes = JSON.stringify({ type: 'text', data: "Menurut data Perda saat ini, aturan tersebut tidak ditemukan." }) + '\n';
@@ -51,26 +99,34 @@ export async function POST(req: Request) {
 
     // 5. Build the legal context for the AI (Token Trimmed)
     const contextText = matches.map((match: any) => {
-      // Trim extremely long chunks to prevent massive token waste, preserving context
-      const safeContent = match.content.length > 1500
-        ? match.content.substring(0, 1500) + "... [Teks dipotong untuk efisiensi]"
-        : match.content;
+      const meta = match.metadata || {};
+      const ref = `[Perda No ${meta.number || '?'}/${meta.year || '?'}, Pasal ${meta.pasal || '?'}]`;
 
-      return `[Referensi Hukum]: ${safeContent}`;
+      const rawContent = match.content || match.content_text || '';
+      const safeContent = rawContent.length > 2000
+        ? rawContent.substring(0, 2000) + "... [Teks dipotong]"
+        : rawContent;
+
+      return `${ref}: ${safeContent}`;
     }).join("\n---\n");
 
     console.log("Formulating answer...");
 
     // 6. Ask Gemini 2.5 Flash to answer based ONLY on the context
     const systemInstruction = `
-    Anda adalah Asisten AI untuk Satpol PP Kabupaten Bolaang Mongondow.
-    Tugas Anda adalah menjawab pertanyaan warga atau petugas HANYA berdasarkan teks hukum yang diberikan.
-    Jika jawabannya tidak ada di teks yang diberikan, katakan: "Menurut data Perda saat ini, aturan tersebut tidak ditemukan."
-    Jangan mengarang jawaban (no hallucinations). Jawab dengan ramah, tegas, dan mudah dimengerti.
+    Anda adalah Asisten AI hukum untuk Satpol PP Kabupaten Bolaang Mongondow.
+    Tugas Anda adalah menjawab pertanyaan dengan akurat berdasarkan teks hukum (REFERENSI) yang diberikan.
+    
+    ATURAN KETAT:
+    1. Jawab HANYA berdasarkan REFERENSI yang diberikan. 
+    2. Identifikasi Pasal dan Nomor Perda jika disebutkan dalam referensi.
+    3. Jika informasi TIDAK ADA di referensi, katakan: "Maaf, berdasarkan data Perda yang saya miliki, informasi tersebut tidak ditemukan."
+    4. Jika referensi mengandung informasi yang relevan meskipun ada sedikit ketidakcocokan metadata (seperti nomor law), prioritaskan isi teks hukumnya.
+    5. Jawab dalam bahasa Indonesia yang profesional, tegas, dan mudah dipahami warga.
     `;
 
     const prompt = `
-    TEKS HUKUM (REFERENSI):
+    REFERENSI HUKUM:
     ${contextText}
     
     PERTANYAAN:

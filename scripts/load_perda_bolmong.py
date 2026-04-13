@@ -56,10 +56,11 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float] | None]:
                 model="models/gemini-embedding-001",
                 contents=texts,
                 config=types.EmbedContentConfig(
-                    task_type="RETRIEVAL_DOCUMENT"
+                    task_type="RETRIEVAL_DOCUMENT",
+                    output_dimensionality=768
                 ),
             )
-            return [e.values for e in result.embeddings]
+            return [e.values[:768] for e in result.embeddings]
         except Exception as e:
             if "429" in str(e) and attempt < EMBEDDING_MAX_RETRIES - 1:
                 wait = EMBEDDING_RETRY_WAIT[attempt]
@@ -97,6 +98,10 @@ def main():
         year_match = re.search(r'(20\d{2})', filename_upper)
         year = int(year_match.group(1)) if year_match else 2024
 
+        # Extract Number (Looks for No. 8 or No 8)
+        num_match = re.search(r'NO\.?\s*(\d+)', filename_upper)
+        reg_num = num_match.group(1) if num_match else "00"
+
         # Map Regulation Type
         reg_type = "PERDA_KAB"
         if "PROV" in filename_upper:
@@ -109,11 +114,11 @@ def main():
         frbr_uri = f"/akn/id/act/local/bolmong/{slug}"
 
         print(f"--- Processing: {pdf_path.name} ---")
-        print(f"    Type: {reg_type} | Year: {year} | URI: {frbr_uri}")
+        print(f"    Type: {reg_type} | No: {reg_num} | Year: {year} | URI: {frbr_uri}")
 
         metadata = {
             "type": reg_type,
-            "number": "00",
+            "number": reg_num,
             "year": year,
             "title_id": pdf_path.stem.replace("_", " ").title(),
             "status": "berlaku",

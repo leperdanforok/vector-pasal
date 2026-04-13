@@ -18,14 +18,17 @@ sb: Client = create_client(sb_url, sb_key)
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 def get_query_embedding(query: str):
-    """Turns the user's question into a 3072-dim vector."""
+    """Turns the user's question into a 768-dim vector."""
     print("🧠 Thinking (embedding question)...")
     result = client.models.embed_content(
         model="models/gemini-embedding-001",
         contents=query,
-        config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY") # Note: QUERY instead of DOCUMENT
+        config=types.EmbedContentConfig(
+            task_type="RETRIEVAL_QUERY", # Note: QUERY instead of DOCUMENT
+            output_dimensionality=768
+        )
     )
-    return result.embeddings[0].values
+    return result.embeddings[0].values[:768]
 
 def search_regulations(query: str):
     """Searches Supabase for the most relevant legal chunks."""
