@@ -112,5 +112,5 @@ Vector Pasal uses a 3-layer safety net to ensure accuracy:
 ## 📝 License
 This project is licensed under the AGPL-3.0 License.
 
-**Developed by [Viddie Pilat](https://github.com/viddie)**
+**Developed by [leperdanforok](https://github.com/leperdanforok)**
 *Built upon the foundation of [pasal.id](https://pasal.id)*
