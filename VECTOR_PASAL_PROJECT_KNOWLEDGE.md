@@ -125,16 +125,17 @@ Legal search is prone to human error (e.g., *smpah* instead of *sampah*). We imp
 | ✅ Feature | Batch processing scripts for regulation ingestion (`load_perda_bolmong.py`) |
 | ✅ Feature | Singleton `get_sb()` Supabase client for reliable service-role operations |
 
-### **v1.3 — Latest (April 15, 2026)**
+### **v1.4 — UI & Performance Overhaul (April 16, 2026)**
 
 | Type | Description |
 |------|-------------|
-| ✅ Feature | **Enhanced Chat Send Button** — Larger, more substantial button with "Kirim" label and send-plane icon |
-| ✅ Feature | **Smart Autoscroll** — Only auto-scrolls when user is within 200px of bottom; respects manual scroll position during AI streaming |
-| ✅ Feature | Developer credit footer added to chat interface |
-| 🐛 Fix | Fixed Gemini embedding error — safe access for `embeddingResponse.embeddings[0]?.values` |
-| 🐛 Fix | Fixed `search_legal_chunks` RPC — switched to OR-based FTS logic for multi-keyword queries |
-| 🐛 Fix | Fixed aggressive autoscroll snapping users back to bottom while reading older messages |
+| ✅ Feature | **Modernized Green Theme** — Professional "Forest & Emerald" palette with clean OKLCH variables. |
+| ✅ Feature | **RAG Pipeline Parallelization** — Parallelized refinement and embedding steps, reducing latency by ~500ms. |
+| ✅ Feature | **Graphify Integration** — Semantic codebase mapping and architecture visualization (Knowledge Graph). |
+| 🚀 Fix | **GIN Index Search** — Replaced correlated subqueries with index-friendly OR-tsquery strings (Migration 061). |
+| 🚀 Fix | **Redundant IO Consolidation** — Enriched RPC metadata reduced API round-trips from 2 to 1. |
+| 🚀 Fix | **Expensive Snippet Optimization** — `ts_headline` now only runs for top-3 results; fallback substrings for others. |
+| 🐛 Fix | Refactored CSS to remove Tailwind v4 `@apply` warnings in `globals.css`. |
 
 ---
 
