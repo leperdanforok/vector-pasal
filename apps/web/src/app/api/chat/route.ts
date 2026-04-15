@@ -15,9 +15,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { query } = body;
 
-    console.log("Refining search query...");
-
-    // 3. User Query Refinement (Fix typos like "smpah" -> "sampah" and extract keywords)
+    // 3. User Query Refinement & Embedding generation (Parallelized for P0)
     const refinementPrompt = `
     Tugas: Ubah pertanyaan warga berikut menjadi kata kunci pencarian hukum yang bersih.
     - Perbaiki Saltik (typo).
@@ -30,24 +28,24 @@ export async function POST(req: Request) {
     Pertanyaan: "${query}"
     `;
 
-    const refinementResult = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: refinementPrompt,
-      config: { temperature: 0 }
-    });
-    const refinedQuery = refinementResult.text?.trim() || query;
+    const [refinementResponse, embeddingResponse] = await Promise.all([
+      ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: refinementPrompt,
+        config: { temperature: 0 }
+      }),
+      ai.models.embedContent({
+        model: 'gemini-embedding-001',
+        contents: query, // Use ORIGINAL query for embedding (fast path)
+        config: {
+          outputDimensionality: 768,
+          taskType: 'RETRIEVAL_QUERY',
+        }
+      })
+    ]);
+
+    const refinedQuery = refinementResponse.text?.trim() || query;
     console.log(`Refined Query: ["${query}"] -> ["${refinedQuery}"]`);
-
-    console.log("Thinking (embedding refined question)...");
-
-    const embeddingResponse = await ai.models.embedContent({
-      model: 'gemini-embedding-001',
-      contents: refinedQuery,
-      config: {
-        outputDimensionality: 768,
-        taskType: 'RETRIEVAL_QUERY',
-      }
-    });
 
     if (!embeddingResponse.embeddings || embeddingResponse.embeddings.length === 0 || !embeddingResponse.embeddings[0].values) {
       throw new Error("Gagal membuat vector dari pertanyaan.");

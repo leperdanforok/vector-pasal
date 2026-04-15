@@ -79,7 +79,66 @@ Legal search is prone to human error (e.g., *smpah* instead of *sampah*). We imp
 
 ---
 
-## 6. Future Roadmap Ideas
+## 6. Changelog: Features & Bug Fixes
+
+### **v1.0 — Foundation (Initial Release)**
+
+| Type | Description |
+|------|-------------|
+| ✅ Feature | Core RAG pipeline with Gemini AI for legal Q&A |
+| ✅ Feature | Supabase PostgreSQL backend with `pgvector` embeddings (768-dim) |
+| ✅ Feature | Full-text search (FTS) with Indonesian stemming |
+| ✅ Feature | Next.js frontend with dark/light mode theming |
+| ✅ Feature | Welcome screen with "Mulai Konsultasi" CTA |
+| ✅ Feature | Chat history persistence via `localStorage` |
+| ✅ Feature | Document modal viewer with copy & share actions |
+| ✅ Feature | Expandable source cards showing legal references |
+| ✅ Feature | Streaming AI responses (NDJSON over fetch) |
+| 🐛 Fix | Restored missing `/data` folder and `topics.ts` |
+| 🐛 Fix | Fixed invalid key syntax in `PasalBlock` component |
+| 🐛 Fix | Fixed Table of Contents ID generation (2 rounds of fixes) |
+| 🐛 Fix | Fixed typo in `pasallist.ts` |
+
+### **v1.1 — Search & Retrieval Overhaul**
+
+| Type | Description |
+|------|-------------|
+| ✅ Feature | **Typo-Resilient Search Pipeline** — 3-layer safety net: AI query refiner → Hybrid RRF → Trigram fallback |
+| ✅ Feature | **Sanction Expansion** — Auto-fetches penalty/fine clauses from the same regulation when a prohibition matches |
+| ✅ Feature | **Hybrid RRF Search** — Combines semantic vector search with keyword-based FTS using Reciprocal Rank Fusion |
+| ✅ Feature | **AI Query Refinement** — Gemini pre-processes queries to correct typos and extract legal intent (Subject/Action/Object) |
+| ✅ Feature | Optimized RAG streaming with proper Markdown table rendering |
+| ✅ Feature | Modern UI redesign (3 themes: Government, Cyber-Legal, Notion-style) |
+| 🐛 Fix | FTS rewritten from strict `AND` logic to `UNION ALL` approach (Migration 059) — fixed "Not Found" mystery |
+| 🐛 Fix | Expanded LLM context window beyond top-5 results to include penalty nodes |
+| 🐛 Fix | Migrated from legacy Google AI SDK to `@google/genai` with `generateContentStream` |
+| 🐛 Fix | Fixed `outputDimensionality: 768` to match Postgres `vector(768)` schema |
+
+### **v1.2 — Polish & UX Improvements**
+
+| Type | Description |
+|------|-------------|
+| ✅ Feature | **Stats Dashboard** — Homepage displays total Perda count from Supabase |
+| ✅ Feature | **MCP Server Integration** — Connect page with live demo, Claude Code/Desktop setup instructions |
+| ✅ Feature | **Internationalization (i18n)** — Multi-locale support via `next-intl` |
+| ✅ Feature | **SEO Optimization** — Breadcrumbs, JSON-LD, sitemap, OpenGraph metadata |
+| ✅ Feature | Batch processing scripts for regulation ingestion (`load_perda_bolmong.py`) |
+| ✅ Feature | Singleton `get_sb()` Supabase client for reliable service-role operations |
+
+### **v1.3 — Latest (April 15, 2026)**
+
+| Type | Description |
+|------|-------------|
+| ✅ Feature | **Enhanced Chat Send Button** — Larger, more substantial button with "Kirim" label and send-plane icon |
+| ✅ Feature | **Smart Autoscroll** — Only auto-scrolls when user is within 200px of bottom; respects manual scroll position during AI streaming |
+| ✅ Feature | Developer credit footer added to chat interface |
+| 🐛 Fix | Fixed Gemini embedding error — safe access for `embeddingResponse.embeddings[0]?.values` |
+| 🐛 Fix | Fixed `search_legal_chunks` RPC — switched to OR-based FTS logic for multi-keyword queries |
+| 🐛 Fix | Fixed aggressive autoscroll snapping users back to bottom while reading older messages |
+
+---
+
+## 7. Future Roadmap Ideas
 
 - **Model-Based Reranking:** Use a Cross-Encoder to re-score the top 20 results before sending to the LLM.
 - **Source Preview:** Implement a PDF viewer that highlights the specific page/article the AI is citing.

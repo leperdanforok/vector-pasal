@@ -111,26 +111,9 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   // Group by regulation and trim to requested limit
   const grouped = groupChunksByWork(chunkList).slice(0, limit);
 
-  const workIds = grouped.map((g) => g.work_id);
-  let worksMap: Record<number, Record<string, unknown>> = {};
-
-  if (workIds.length > 0) {
-    const { data: works } = await supabase
-      .from("works")
-      .select("id, frbr_uri, title_id, number, year, status, regulation_types(code)")
-      .in("id", workIds);
-    worksMap = Object.fromEntries((works || []).map((w: { id: number }) => [w.id, w]));
-  }
-
   const results = grouped.map((group) => {
-    const work = worksMap[group.work_id] as {
-      frbr_uri: string;
-      title_id: string;
-      number: string;
-      year: number;
-      status: string;
-      regulation_types: { code: string }[] | { code: string } | null;
-    } | undefined;
+    // The optimized RPC now returns ALL necessary work metadata in the .metadata field
+    const meta = group.bestChunk.metadata || {};
 
     return {
       work_id: group.work_id,
@@ -138,16 +121,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       score: group.bestScore,
       matching_pasals: group.matchingPasals,
       total_chunks: group.totalChunks,
-      work: work
-        ? {
-            frbr_uri: work.frbr_uri,
-            title: work.title_id,
-            number: work.number,
-            year: work.year,
-            status: work.status,
-            type: getRegTypeCode(work.regulation_types),
-          }
-        : null,
+      work: {
+        frbr_uri: meta.frbr_uri || "",
+        title: meta.title || "",
+        number: meta.number || "",
+        year: parseInt(meta.year || "0"),
+        status: meta.status || "",
+        type: meta.type || "",
+      },
     };
   });
 

@@ -35,7 +35,7 @@ export const metadata: Metadata = {
   description: "Akses cepat Peraturan Daerah Kabupaten Bolaang Mongondow dengan asisten AI.",
   manifest: "/site.webmanifest",
   other: {
-    "msapplication-TileColor": "#F8F5F0",
+    "msapplication-TileColor": "#FBFCFA",
     // If you don't have this file, you can comment this line out
     // "msapplication-TileImage": "/mstile-150x150.png", 
   },
@@ -50,7 +50,7 @@ export default async function RootLayout({
   return (
     <html lang={locale}>
       <head>
-        <meta name="theme-color" content="#F8F5F0" />
+        <meta name="theme-color" content="#FBFCFA" />
       </head>
       <body
         className={`${instrumentSerif.variable} ${instrumentSans.variable} ${jetbrainsMono.variable} antialiased font-sans`}
