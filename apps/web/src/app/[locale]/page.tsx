@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Image from 'next/image';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -59,6 +59,7 @@ export default function Home() {
   // --- STATE ---
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [selectedDocument, setSelectedDocument] = useState<any | null>(null); // NEW: Tracks which document is currently open in the modal
+  const chatContainerRef = useRef<HTMLDivElement>(null);
 
   // --- LOAD PREFERENCES (HISTORY & THEME) ---
   useEffect(() => {
@@ -93,6 +94,27 @@ export default function Home() {
       localStorage.setItem('vp_chat_history', JSON.stringify(messages));
     }
   }, [messages]);
+
+  // --- SMART AUTOSCROLL LOGIC ---
+  useEffect(() => {
+    if (messages.length > 0 || loading) {
+      const container = chatContainerRef.current;
+      if (container) {
+        const { scrollTop, scrollHeight, clientHeight } = container;
+        const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+
+        // If user is within 200px of bottom, auto-scroll to show new content
+        if (distanceFromBottom < 200) {
+          setTimeout(() => {
+            container.scrollTo({
+              top: container.scrollHeight,
+              behavior: 'smooth'
+            });
+          }, 100);
+        }
+      }
+    }
+  }, [messages, loading]);
 
   const getCurrentTime = () => {
     return new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -148,7 +170,7 @@ export default function Home() {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; 
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
           if (line.trim()) {
@@ -165,11 +187,11 @@ export default function Home() {
               // Update the last message dynamically
               setMessages(prev => {
                 const updated = [...prev];
-                updated[updated.length - 1] = { 
-                  role: 'ai', 
-                  content: aiMessageContent, 
-                  sources: aiSources.length > 0 ? aiSources : undefined, 
-                  time: aiTime 
+                updated[updated.length - 1] = {
+                  role: 'ai',
+                  content: aiMessageContent,
+                  sources: aiSources.length > 0 ? aiSources : undefined,
+                  time: aiTime
                 };
                 return updated;
               });
@@ -286,7 +308,11 @@ export default function Home() {
 
           /* --- SCREEN 2: CHAT SCREEN --- */
           <div className="flex-1 flex flex-col relative z-0 min-h-0">
-            <div className="flex-1 overflow-y-auto px-4 sm:px-8 py-8 space-y-8 pb-32 scroll-smooth">
+            <div
+              ref={chatContainerRef}
+              className="flex-1 overflow-y-auto px-4 sm:px-8 py-8 space-y-8 pb-32 scroll-smooth"
+            >
+
               <div className="w-full max-w-3xl mx-auto space-y-8">
 
                 {messages.length === 0 ? (
@@ -379,14 +405,29 @@ export default function Home() {
                     className={`flex-1 px-6 py-4 bg-transparent text-[14px] focus:outline-none placeholder-opacity-70 ${isDarkMode ? 'text-white placeholder-slate-500' : 'text-slate-800 placeholder-slate-400'}`}
                     disabled={loading}
                   />
-                  <div className="pr-2">
-                    <button type="submit" disabled={loading || !query.trim()} className={`p-2.5 rounded-xl transition-all duration-300 flex items-center justify-center ${loading || !query.trim() ? (isDarkMode ? 'bg-slate-800 text-slate-600' : 'bg-slate-100 text-slate-400') : (isDarkMode ? 'bg-cyan-500 text-slate-900 hover:bg-cyan-400 hover:scale-105 hover:shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'bg-blue-900 text-white hover:bg-blue-800 hover:shadow-lg hover:-translate-y-0.5')}`}>
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-8.707l-3-3a1 1 0 00-1.414 0l-3 3a1 1 0 001.414 1.414L9 9.414V13a1 1 0 102 0V9.414l1.293 1.293a1 1 0 001.414-1.414z" clipRule="evenodd" /></svg>
+                  <div className="pr-3">
+                    <button
+                      type="submit"
+                      disabled={loading || !query.trim()}
+                      className={`px-5 py-2.5 rounded-xl transition-all duration-300 flex items-center gap-2 font-bold text-[13px] shadow-sm
+                        ${loading || !query.trim()
+                          ? (isDarkMode ? 'bg-slate-800 text-slate-600' : 'bg-slate-100 text-slate-400')
+                          : (isDarkMode
+                            ? 'bg-cyan-500 text-slate-950 hover:bg-cyan-400 hover:scale-105 hover:shadow-[0_0_20px_rgba(6,182,212,0.4)] active:scale-95'
+                            : 'bg-blue-900 text-white hover:bg-blue-800 hover:shadow-[0_8px_20px_-4px_rgba(30,58,138,0.3)] hover:-translate-y-0.5 active:translate-y-0 active:scale-95')
+                        }`}
+                    >
+                      <span className="hidden xs:inline">Kirim</span>
+                      <svg xmlns="http://www.w3.org/2000/svg" className={`h-4 w-4 rotate-90 transition-transform duration-300 ${!query.trim() ? '' : 'group-hover:translate-x-0.5'}`} viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.428a1 1 0 001.17-1.408l-7-14z" />
+                      </svg>
                     </button>
                   </div>
                 </form>
                 <div className={`text-center mt-3 text-[10.5px] tracking-wide font-medium ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                   AI dapat membuat kesalahan. Harap verifikasi dokumen asli.
+                </div><div className={`text-center mt-3 text-[10.5px] tracking-wide font-medium ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                  Vector Pasal 1.0 . Develop by Viddie Pilat.
                 </div>
               </div>
             </div>
