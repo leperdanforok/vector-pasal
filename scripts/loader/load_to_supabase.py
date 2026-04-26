@@ -56,8 +56,9 @@ def init_supabase():
 def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
     """Extract text from PDF, correct OCR errors, parse structure.
 
-    Shared helper used by all one-off loader scripts (load_uud.py,
-    load_perda_bolmong.py, etc.) to avoid duplicating the pipeline.
+    Checks data/transcriptions/ for a .md file with the same slug before
+    attempting direct PDF extraction. This enables support for scanned
+    PDFs transcribed via AI or manually.
 
     Returns a law dict compatible with ``load_work()``, or None on failure.
     """
@@ -65,14 +66,26 @@ def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
     from parser.ocr_correct import correct_ocr_errors
     from parser.parse_structure import parse_structure, count_pasals
 
-    text, stats = extract_text_pymupdf(pdf_path)
-    if not text or stats.get("error"):
-        print(f"   Extract failed: {stats.get('error', 'empty text')}")
-        return None
+    # Check for transcription override first (useful for scanned PDFs)
+    transcription_dir = Path(__file__).parent.parent.parent / "data" / "transcriptions"
+    slug = metadata.get("slug", pdf_path.stem.lower().replace(" ", "-").replace("_", "-"))
+    transcription_path = transcription_dir / f"{slug}.md"
 
-    print(f"   Extracted: {stats['page_count']} pages, {stats['char_count']} chars")
+    text = None
+    stats = {}
 
-    text = correct_ocr_errors(text)
+    if transcription_path.exists():
+        print(f"   [Found Transcription] Loading {transcription_path.name}")
+        text = transcription_path.read_text(encoding="utf-8")
+        stats = {"page_count": "?", "char_count": len(text), "source": "manual_transcription"}
+    else:
+        text, stats = extract_text_pymupdf(pdf_path)
+        if not text or stats.get("error"):
+            print(f"   Extract failed: {stats.get('error', 'empty text')}")
+            return None
+        print(f"   Extracted: {stats['page_count']} pages, {stats['char_count']} chars")
+        text = correct_ocr_errors(text)
+
     nodes = parse_structure(text)
     pasal_count = count_pasals(nodes)
     print(f"   Parsed: {len(nodes)} top-level nodes, {pasal_count} pasals")

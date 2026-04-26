@@ -28,7 +28,8 @@ from loader.load_to_supabase import (
     get_sb, process_pdf, load_work, cleanup_work_data, load_nodes_by_level,
 )
 
-PDF_DIR = Path(r"F:\Bolmong_Regulations")
+BASE_DIR = Path(__file__).parent.parent
+PDF_DIR = BASE_DIR / "data" / "raw_pdf"
 
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
@@ -98,8 +99,8 @@ def main():
         year_match = re.search(r'(20\d{2})', filename_upper)
         year = int(year_match.group(1)) if year_match else 2024
 
-        # Extract Number (Looks for No. 8 or No 8)
-        num_match = re.search(r'NO\.?\s*(\d+)', filename_upper)
+        # Extract Number (Looks for No. 8, No 8, or Nomor 8)
+        num_match = re.search(r'(?:NO\.?|NOMOR)\s*(\d+)', filename_upper)
         reg_num = num_match.group(1) if num_match else "00"
 
         # Map Regulation Type
@@ -163,9 +164,16 @@ def main():
                 for batch_start in range(0, len(embeddable), EMBEDDING_BATCH_SIZE):
                     batch = embeddable[batch_start:batch_start + EMBEDDING_BATCH_SIZE]
 
-                    # Contextualize: prepend law title for better embedding quality
-                    context_prefix = f"[{metadata['title_id']}] "
-                    texts = [context_prefix + n["content"] for n in batch]
+                    # Contextualize: prepend law title + node identity for better retrieval
+                    # Example: "[Perda No 3 2023] Pasal 12 Ayat (1): Peternak harus..."
+                    law_title = metadata['title_id']
+                    updates = []
+                    texts = []
+                    
+                    for n in batch:
+                        node_identity = f"{n['node_type'].capitalize()} {n['number']}"
+                        full_context_text = f"[{law_title}] {node_identity}: {n['content']}"
+                        texts.append(full_context_text)
 
                     vectors = get_embeddings_batch(texts)
 

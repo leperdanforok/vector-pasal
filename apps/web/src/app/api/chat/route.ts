@@ -60,11 +60,11 @@ export async function POST(req: Request) {
       supabase.rpc('match_legal_chunks', {
         query_embedding: queryVector,
         match_threshold: 0.1, // Very lenient — let the LLM decide relevance
-        match_count: 10
+        match_count: 15
       }),
       supabase.rpc('search_legal_chunks', {
         query_text: refinedQuery,
-        match_count: 13
+        match_count: 15
       })
     ]);
 
@@ -88,39 +88,34 @@ export async function POST(req: Request) {
     });
 
 
-    if (!matches || matches.length === 0) {
-      const emptyRes = JSON.stringify({ type: 'text', data: "Menurut data Perda saat ini, aturan tersebut tidak ditemukan." }) + '\n';
-      return new Response(emptyRes, {
-        headers: { 'Content-Type': 'application/x-ndjson' }
-      });
-    }
-
     // 5. Build the legal context for the AI (Token Trimmed)
-    const contextText = matches.map((match: any) => {
-      const meta = match.metadata || {};
-      const ref = `[Perda No ${meta.number || '?'}/${meta.year || '?'}, Pasal ${meta.pasal || '?'}]`;
+    const contextText = matches.length > 0 
+      ? matches.map((match: any) => {
+          const meta = match.metadata || {};
+          const ref = `[Perda No ${meta.number || '?'}/${meta.year || '?'}, Pasal ${meta.pasal || '?'}]`;
 
-      const rawContent = match.content || match.content_text || '';
-      const safeContent = rawContent.length > 2000
-        ? rawContent.substring(0, 2000) + "... [Teks dipotong]"
-        : rawContent;
+          const rawContent = match.content || match.content_text || '';
+          const safeContent = rawContent.length > 2000
+            ? rawContent.substring(0, 2000) + "... [Teks dipotong]"
+            : rawContent;
 
-      return `${ref}: ${safeContent}`;
-    }).join("\n---\n");
+          return `${ref}: ${safeContent}`;
+        }).join("\n---\n")
+      : "TIDAK ADA REFERENSI HUKUM YANG RELEVAN UNTUK PERTANYAAN INI.";
 
     console.log("Formulating answer...");
 
     // 6. Ask Gemini 2.5 Flash to answer based ONLY on the context
     const systemInstruction = `
-    Anda adalah Asisten AI hukum untuk Satpol PP Kabupaten Bolaang Mongondow.
-    Tugas Anda adalah menjawab pertanyaan dengan akurat berdasarkan teks hukum (REFERENSI) yang diberikan.
-    
-    ATURAN KETAT:
-    1. Jawab HANYA berdasarkan REFERENSI yang diberikan. 
-    2. Identifikasi Pasal dan Nomor Perda jika disebutkan dalam referensi.
-    3. Jika informasi TIDAK ADA di referensi, katakan: "Maaf, berdasarkan data Perda yang saya miliki, informasi tersebut tidak ditemukan."
-    4. Jika referensi mengandung informasi yang relevan meskipun ada sedikit ketidakcocokan metadata (seperti nomor law), prioritaskan isi teks hukumnya.
-    5. Jawab dalam bahasa Indonesia yang profesional, tegas, dan mudah dipahami warga.
+    Anda adalah Asisten AI hukum (Vector Pasal) untuk Satpol PP Kabupaten Bolaang Mongondow. 
+    Anda harus bersikap ramah, profesional, dan sangat membantu.
+
+    TUGAS & ATURAN:
+    1. MENANGANI SAPAAN: Jika pengguna menyapa (seperti "halo", "hai", "selamat pagi", dsb), balaslah dengan ramah: "Halo! Ada yang bisa dibantu atau ada yang perlu ditanyakan? Silahkan, saya siap membantu."
+    2. MENJAWAB PERTANYAAN HUKUM: Jika pengguna bertanya tentang hukum, jawablah berdasarkan REFERENSI HUKUM yang diberikan.
+    3. IDENTIFIKASI SUMBER: Sebutkan Nomor Perda dan Pasal jika tersedia di referensi.
+    4. REFERENSI TIDAK DITEMUKAN: Jika pertanyaan bersifat hukum tetapi tidak ditemukan di REFERENSI HUKUM, katakan: "Mohon maaf, berdasarkan data Perda yang saya miliki saat ini, aturan tersebut tidak ditemukan."
+    5. BAHASA: Gunakan Bahasa Indonesia yang sopan dan mudah dimengerti warga.
     `;
 
     const prompt = `
@@ -137,7 +132,7 @@ export async function POST(req: Request) {
       contents: prompt,
       config: {
         systemInstruction: systemInstruction,
-        temperature: 0.1
+        temperature: 0.2
       }
     });
 

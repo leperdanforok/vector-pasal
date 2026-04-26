@@ -208,8 +208,12 @@ export default function Home() {
     }
   };
 
+  const [showGuideModal, setShowGuideModal] = useState(false);
+  const [showAboutModal, setShowAboutModal] = useState(false);
+
   const handleMenuClick = (item: string) => {
-    alert(`Fitur "${item}" akan segera hadir!`);
+    if (item === "Panduan Aplikasi") setShowGuideModal(true);
+    if (item === "Tentang") setShowAboutModal(true);
     setIsMenuOpen(false);
   };
 
@@ -508,6 +512,85 @@ export default function Home() {
                 </div>
 
                 <button onClick={() => setSelectedDocument(null)} className={`px-6 py-2.5 text-[12px] font-bold rounded-xl transition-all shadow-md ${isDarkMode ? 'bg-emerald-500 text-emerald-950 hover:bg-emerald-400 hover:shadow-emerald-500/20' : 'bg-emerald-900 text-white hover:bg-emerald-800 hover:shadow-emerald-900/20'}`}>
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* --- PANDUAN MODAL --- */}
+        {showGuideModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-emerald-950/60 backdrop-blur-md transition-all duration-300 animate-in fade-in" onClick={() => setShowGuideModal(false)}>
+            <div
+              className={`w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 ring-1 ${isDarkMode ? 'bg-card ring-white/10' : 'bg-white ring-emerald-100'}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className={`px-6 py-5 border-b flex justify-between items-center ${isDarkMode ? 'bg-background border-white/5' : 'bg-emerald-50/30 border-emerald-50'}`}>
+                <h3 className={`font-semibold text-base flex items-center gap-3 ${isDarkMode ? 'text-white' : 'text-emerald-950'}`}>
+                  <span className="text-xl">📖</span> Panduan Aplikasi
+                </h3>
+                <button onClick={() => setShowGuideModal(false)} className="text-slate-400 hover:text-slate-600 transition-colors">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+                </button>
+              </div>
+              <div className="p-8 space-y-6">
+                <div className="flex gap-4">
+                  <div className={`w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center font-bold ${isDarkMode ? 'bg-emerald-900/50 text-emerald-400' : 'bg-emerald-100 text-emerald-800'}`}>1</div>
+                  <div>
+                    <h4 className={`font-bold text-sm ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>Cari Aturan</h4>
+                    <p className={`text-xs mt-1 leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Gunakan bahasa sehari-hari. Contoh: "Apa aturan tentang hewan ternak di jalan?"</p>
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  <div className={`w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center font-bold ${isDarkMode ? 'bg-emerald-900/50 text-emerald-400' : 'bg-emerald-100 text-emerald-800'}`}>2</div>
+                  <div>
+                    <h4 className={`font-bold text-sm ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>Periksa Sumber</h4>
+                    <p className={`text-xs mt-1 leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>Klik "Buka Dokumen Penuh" pada sumber untuk melihat teks asli Peraturan Daerah.</p>
+                  </div>
+                </div>
+                <div className="flex gap-4">
+                  <div className={`w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center font-bold ${isDarkMode ? 'bg-emerald-900/50 text-emerald-400' : 'bg-emerald-100 text-emerald-800'}`}>3</div>
+                  <div>
+                    <h4 className={`font-bold text-sm ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>Verifikasi</h4>
+                    <p className={`text-xs mt-1 leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>AI dapat membuat kesalahan. Selalu verifikasi jawaban dengan dokumen fisik untuk keperluan hukum resmi.</p>
+                  </div>
+                </div>
+                <button onClick={() => setShowGuideModal(false)} className={`w-full py-3 rounded-2xl font-bold text-sm transition-all mt-4 ${isDarkMode ? 'bg-emerald-500 text-emerald-950 hover:bg-emerald-400' : 'bg-emerald-900 text-white hover:bg-emerald-800'}`}>
+                  Saya Mengerti
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* --- TENTANG MODAL --- */}
+        {showAboutModal && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 bg-emerald-950/60 backdrop-blur-md transition-all duration-300 animate-in fade-in" onClick={() => setShowAboutModal(false)}>
+            <div
+              className={`w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 ring-1 ${isDarkMode ? 'bg-card ring-white/10' : 'bg-white ring-emerald-100'}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className={`px-6 py-10 flex flex-col items-center text-center ${isDarkMode ? 'bg-background' : 'bg-emerald-50/30'}`}>
+                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center mb-6 ${isDarkMode ? 'bg-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.3)]' : 'bg-emerald-900'}`}>
+                  <Image src="/icon.png" alt="Logo" width={40} height={40} style={{ filter: 'invert(1) brightness(2)' }} />
+                </div>
+                <h3 className={`font-bold text-2xl tracking-tight ${isDarkMode ? 'text-white' : 'text-emerald-950'}`}>Vector Pasal</h3>
+                <p className={`text-[11px] font-bold uppercase tracking-[0.2em] mt-1 ${isDarkMode ? 'text-emerald-400' : 'text-emerald-600'}`}>Smart Legal Assistant</p>
+              </div>
+              <div className="p-8 space-y-6">
+                <p className={`text-sm leading-relaxed text-center ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Vector Pasal adalah asisten digital berbasis AI yang dirancang untuk mendigitalisasi dan memudahkan akses informasi hukum bagi petugas <strong>Satpol PP Kabupaten Bolaang Mongondow</strong>.
+                </p>
+                <div className={`p-4 rounded-2xl flex items-center gap-4 ${isDarkMode ? 'bg-white/5 border border-white/5' : 'bg-slate-50 border border-slate-100'}`}>
+                  <div className="w-10 h-10 rounded-full bg-emerald-500 flex-shrink-0 flex items-center justify-center text-white font-bold text-lg">V</div>
+                  <div className="flex-1">
+                    <h4 className={`font-bold text-[13px] ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>Viddie Pilat</h4>
+                    <p className={`text-[11px] ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Developer & Architect</p>
+                  </div>
+                  <div className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-wider ${isDarkMode ? 'bg-emerald-500/10 text-emerald-400' : 'bg-emerald-100 text-emerald-800'}`}>v1.3</div>
+                </div>
+                <button onClick={() => setShowAboutModal(false)} className={`w-full py-3 rounded-2xl font-bold text-sm transition-all ${isDarkMode ? 'bg-emerald-500 text-emerald-950 hover:bg-emerald-400' : 'bg-emerald-900 text-white hover:bg-emerald-800'}`}>
                   Tutup
                 </button>
               </div>

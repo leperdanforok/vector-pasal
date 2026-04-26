@@ -146,4 +146,23 @@ Legal search is prone to human error (e.g., *smpah* instead of *sampah*). We imp
 - **Multi-Work Synthesis:** Enhancing the "Comparison" feature where citizens can see differences between older and newer regulations on the same topic.
 
 ---
-*Created by Antigravity AI - April 2026*
+
+## 8. Data Ingestion & Maintenance Guide (Playbook)
+
+### **A. Folder Management**
+Maintain the following structure inside `f:\vector-pasal\data\`:
+- `raw_pdf/`: Input folder for all Perda PDF files.
+- `transcriptions/`: Cache folder for Markdown transcriptions (prevents redundant OCR costs).
+
+### **B. The Ingestion Pipeline**
+1.  **Run Smart OCR:** `.\venv\Scripts\python.exe scripts/loader/smart_ocr.py`. This script automatically detects if a PDF is scanned and generates a Markdown transcription using Gemini 1.5 Flash.
+2.  **Clear Database (If Fresh Start Needed):** Run `TRUNCATE TABLE work_relationships, document_nodes, works RESTART IDENTITY CASCADE;` in the Supabase SQL Editor.
+3.  **Load to Supabase:** `.\venv\Scripts\python.exe scripts/load_perda_bolmong.py`.
+
+### **C. Advanced Search Tuning**
+- **Retrieval Depth:** Modify `match_count` in `apps/web/src/app/api/chat/route.ts` to adjust how many articles the AI reads (current: 15 vector + 15 FTS).
+- **Contextual Embeddings:** The system uses **Contextual Embedding Enrichment**, prepending the Law Title and Pasal Number to each chunk before vectorization to improve cross-reference accuracy.
+- **Prompt Flexibility:** The system instruction in `route.ts` encourages the AI to search for alternative relevant rules (e.g., general cattle rules) if a specific detailed action (e.g., cow seizure) isn't found.
+
+---
+*Updated by Antigravity AI - April 26, 2026*
