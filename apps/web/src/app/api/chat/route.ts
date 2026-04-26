@@ -108,14 +108,14 @@ export async function POST(req: Request) {
     // 6. Ask Gemini 2.5 Flash to answer based ONLY on the context
     const systemInstruction = `
     Anda adalah Asisten AI hukum (Vector Pasal) untuk Satpol PP Kabupaten Bolaang Mongondow. 
-    Anda harus bersikap ramah, profesional, dan sangat membantu.
+    Anda harus bersikap profesional, tegas, dan sangat akurat.
 
     TUGAS & ATURAN:
-    1. MENANGANI SAPAAN: Jika pengguna menyapa (seperti "halo", "hai", "selamat pagi", dsb), balaslah dengan ramah: "Halo! Ada yang bisa dibantu atau ada yang perlu ditanyakan? Silahkan, saya siap membantu."
-    2. MENJAWAB PERTANYAAN HUKUM: Jika pengguna bertanya tentang hukum, jawablah berdasarkan REFERENSI HUKUM yang diberikan.
-    3. IDENTIFIKASI SUMBER: Sebutkan Nomor Perda dan Pasal jika tersedia di referensi.
-    4. REFERENSI TIDAK DITEMUKAN: Jika pertanyaan bersifat hukum tetapi tidak ditemukan di REFERENSI HUKUM, katakan: "Mohon maaf, berdasarkan data Perda yang saya miliki saat ini, aturan tersebut tidak ditemukan."
-    5. BAHASA: Gunakan Bahasa Indonesia yang sopan dan mudah dimengerti warga.
+    1. MENJAWAB PERTANYAAN HUKUM: Jawablah pertanyaan pengguna secara langsung dan akurat berdasarkan REFERENSI HUKUM yang diberikan.
+    2. IDENTIFIKASI SUMBER: Wajib sebutkan Nomor Perda dan Pasal sebagai referensi dalam jawaban Anda.
+    3. REFERENSI TIDAK DITEMUKAN: Jika pertanyaan bersifat hukum tetapi tidak ditemukan di REFERENSI HUKUM, katakan: "Mohon maaf, berdasarkan data Perda yang saya miliki saat ini, aturan tersebut tidak ditemukan."
+    4. GAYA BAHASA: Gunakan Bahasa Indonesia yang formal, ringkas, dan langsung pada intinya. Jangan menambahkan sapaan basa-basi kecuali jika pengguna memang hanya menyapa.
+    5. TEKNIS: Jika pengguna hanya menyapa (halo/hai), balas dengan sapaan singkat saja dan tanyakan apa yang bisa dibantu secara ringkas.
     `;
 
     const prompt = `
@@ -140,15 +140,35 @@ export async function POST(req: Request) {
     const encoder = new TextEncoder();
     const readable = new ReadableStream({
       async start(controller) {
-        // Send sources as the first chunk
-        controller.enqueue(encoder.encode(JSON.stringify({ type: 'sources', data: matches }) + '\n'));
+        let fullAnswer = "";
 
         try {
+          // Stream the text first
           for await (const chunk of stream) {
             if (chunk.text) {
+              fullAnswer += chunk.text;
               controller.enqueue(encoder.encode(JSON.stringify({ type: 'text', data: chunk.text }) + '\n'));
             }
           }
+
+          // 8. Dynamic Source Filtering (Post-Generation)
+          // Look for mentioned Pasals in the text (e.g., "Pasal 13", "Pasal 37")
+          const citedPasals = Array.from(fullAnswer.matchAll(/Pasal\s*(\d+)/gi)).map(m => m[1]);
+          
+          let filteredMatches = matches.filter((m: any) => {
+            const pno = (m.metadata?.pasal || "").toString();
+            // Check if the pasal number from metadata appears in the cited list
+            return citedPasals.some(cp => pno === cp || pno.startsWith(cp + " ") || pno.startsWith(cp + " ayat"));
+          });
+
+          // Use filtered sources if found, otherwise fallback to top 3 relevant results
+          const finalSources = filteredMatches.length > 0 
+            ? filteredMatches.slice(0, 3) 
+            : matches.slice(0, 3);
+
+          // Send sources as the final chunk
+          controller.enqueue(encoder.encode(JSON.stringify({ type: 'sources', data: finalSources }) + '\n'));
+
         } catch (err) {
           console.error("Stream error:", err);
           controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', data: 'Error generating response' }) + '\n'));

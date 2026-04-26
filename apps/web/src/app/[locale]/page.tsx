@@ -11,38 +11,63 @@ function ExpandableSource({ source, isDarkMode, onViewFull }: { source: any, isD
   const [expanded, setExpanded] = useState(false);
   const isLong = source.content.length > 100;
 
+  const meta = source.metadata || {};
+  
+  // Format the citation header
+  const perdaType = meta.type === 'PERDA_KAB' ? 'Perda Kab.' : (meta.type || 'Perda');
+  const perdaInfo = `${perdaType} No. ${meta.number || '?'}/${meta.year || '?'}`;
+  
+  // Format Pasal and Ayat
+  const pasalLabel = `Pasal ${meta.pasal || '?'}`;
+  const ayatLabel = meta.ayat ? `Ayat (${meta.ayat})` : "";
+
   return (
     <div
       onClick={() => isLong && setExpanded(!expanded)}
-      className={`p-4 rounded-xl text-[13px] transition-all duration-300
+      className={`p-5 rounded-2xl text-[13px] transition-all duration-300 border mb-1
         ${isDarkMode
-          ? 'bg-[#0f172a] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.05)] text-gray-300 hover:bg-[#1e293b]'
-          : 'bg-white shadow-[0_2px_10px_-3px_rgba(30,58,138,0.05)] text-slate-700 hover:shadow-[0_4px_12px_-3px_rgba(30,58,138,0.1)]'} 
+          ? 'bg-[#0f172a] border-emerald-900/30 text-gray-300 hover:bg-[#1e293b]'
+          : 'bg-white border-emerald-50 text-slate-700 hover:shadow-[0_8px_30px_rgb(0,0,0,0.04)] hover:border-emerald-100'} 
         ${isLong ? 'cursor-pointer' : ''}
       `}
     >
-      <div className={`${expanded ? '' : 'line-clamp-2'} leading-relaxed font-serif`}>
+      <div className="flex items-center justify-between mb-3.5">
+        <div className="flex flex-col gap-0.5">
+          <span className={`text-[10px] font-bold uppercase tracking-[0.1em] ${isDarkMode ? 'text-emerald-500' : 'text-emerald-700'}`}>
+            {perdaInfo}
+          </span>
+          <span className={`text-[13px] font-bold ${isDarkMode ? 'text-slate-100' : 'text-slate-900'}`}>
+            {pasalLabel}{ayatLabel ? ` • ${ayatLabel}` : ''}
+          </span>
+        </div>
+        <div className={`px-2.5 py-1 rounded-lg text-[9px] font-black uppercase tracking-wider ${isDarkMode ? 'bg-emerald-950/50 text-emerald-400 border border-emerald-500/20' : 'bg-emerald-50 text-emerald-800 border border-emerald-100'}`}>
+          SUMBER
+        </div>
+      </div>
+
+      <div className={`${expanded ? '' : 'line-clamp-2'} leading-relaxed font-serif text-[13.5px]`}>
         {source.content}
       </div>
+      
       {isLong && !expanded && (
-        <span className={`font-medium text-[11px] mt-2 block ${isDarkMode ? 'text-emerald-400' : 'text-emerald-800'}`}>
-          Baca selengkapnya ▾
+        <span className={`font-bold text-[10px] uppercase tracking-wider mt-3 block ${isDarkMode ? 'text-emerald-500' : 'text-emerald-600'}`}>
+          Lihat selengkapnya ▾
         </span>
       )}
       {isLong && expanded && (
-        <span className={`font-medium text-[11px] mt-3 block ${isDarkMode ? 'text-gray-500' : 'text-slate-400'}`}>
-          Sembunyikan teks ▴
+        <span className={`font-bold text-[10px] uppercase tracking-wider mt-4 block ${isDarkMode ? 'text-slate-600' : 'text-slate-400'}`}>
+          Tutup teks ▴
         </span>
       )}
 
       <button
         onClick={(e) => { e.stopPropagation(); onViewFull(source); }}
-        className={`mt-4 w-full py-2.5 rounded-lg text-[12px] font-medium transition-all flex justify-center items-center gap-2 group
+        className={`mt-4 w-full py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-wider transition-all flex justify-center items-center gap-2 group
           ${isDarkMode
-            ? 'bg-transparent border border-emerald-900/50 text-emerald-400 hover:bg-emerald-950/30 hover:border-emerald-500/50'
-            : 'bg-emerald-50/50 border border-emerald-100 text-emerald-800 hover:bg-white hover:border-emerald-400/50 hover:text-emerald-900 hover:shadow-sm'}`}
+            ? 'bg-transparent border border-emerald-900/50 text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500/50'
+            : 'bg-emerald-50/50 border border-emerald-100 text-emerald-800 hover:bg-white hover:border-emerald-400 hover:text-emerald-900 hover:shadow-sm'}`}
       >
-        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 transition-transform group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5 transition-transform group-hover:scale-110" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
         Buka Dokumen Penuh
       </button>
     </div>
