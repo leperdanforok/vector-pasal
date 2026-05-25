@@ -329,7 +329,7 @@ export default function Home() {
               </div>
             </div>
             <div className={`py-8 flex flex-col items-center justify-center text-center ${isDarkMode ? 'text-slate-700' : 'text-slate-400'}`}>
-              <span className="text-xs tracking-widest uppercase font-semibold mb-1.5">Vector Pasal v1.3</span>
+              <span className="text-xs tracking-widest uppercase font-semibold mb-1.5">Vector Pasal v1.4</span>
               <span className={`text-[10px] tracking-wider uppercase font-medium ${isDarkMode ? 'text-slate-600' : 'text-slate-400'}`}>Develop by Viddie Pilat</span>
             </div>
           </div>
@@ -456,7 +456,7 @@ export default function Home() {
                 <div className={`text-center mt-3 text-[10.5px] tracking-wide font-medium ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                   AI dapat membuat kesalahan. Harap verifikasi dokumen asli.
                 </div><div className={`text-center mt-3 text-[10.5px] tracking-wide font-medium ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                  Vector Pasal 1.3 . Develop by Viddie Pilat.
+                  Vector Pasal 1.4 . Develop by Viddie Pilat.
                 </div>
               </div>
             </div>
