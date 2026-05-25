@@ -26,9 +26,8 @@ Cleanup is tracked in [VECTOR_PASAL_CLEANUP_PLAN.md](VECTOR_PASAL_CLEANUP_PLAN.m
 - **Public API v1** — [apps/web/src/app/api/v1/](apps/web/src/app/api/v1/) (search + laws endpoints) and [apps/web/src/app/api/laws/](apps/web/src/app/api/laws/). Not consumed by the Bolmong chatbot.
 - **Suggestions system** — [apps/web/src/app/api/suggestions/](apps/web/src/app/api/suggestions/), [apps/web/src/components/suggestions/](apps/web/src/components/suggestions/), Gemini-based verification in [scripts/agent/](scripts/agent/), migrations 017/022/031/045/046/047.
 - **Crawler pipeline** — the entire automated peraturan.go.id crawler in [scripts/crawler/](scripts/crawler/), [scripts/worker/](scripts/worker/), [scripts/parser/](scripts/parser/). Bolmong ingestion does **not** use this — it uses the smart_ocr + `load_perda_bolmong.py` flow. [scripts/CLAUDE.md](scripts/CLAUDE.md) documents this crawler pipeline in detail, but be aware most of what it describes is not on the Bolmong critical path.
-- **One-off national-law loaders** — `scripts/load_uud.py`, `scripts/load_uu_6_2023.py`, `scripts/seed_relationships.py`. Useful as references but not Bolmong content.
-- **OCR experiments** — `scripts/ocr_test_chandra.py`, `ocr_test_gemini.py`, `ocr_test_ollama.py`, `ocr_test_surya.py` (unstaged scratch work).
-- **`scratch/`, `ocr_pipeline_log.txt`, `graphify-out/`** — scratch/output, untracked.
+- **One-off national-law loaders** — `scripts/load_uud.py`, `scripts/seed_relationships.py`. Useful as references but not Bolmong content.
+- **`graphify-out/`** — graphify output, gitignored.
 
 When the user asks about ingestion, default to the smart_ocr + `load_perda_bolmong.py` path unless they explicitly mention the crawler.
 
@@ -118,7 +117,7 @@ Web uses `NEXT_PUBLIC_SUPABASE_URL`; Python surfaces use `SUPABASE_URL`. Don't r
 - Web → Vercel ([apps/web/vercel.json](apps/web/vercel.json)).
 - MCP server → Railway ([apps/mcp-server/railway.json](apps/mcp-server/railway.json), Dockerfile).
 - Crawler worker → Railway as a `continuous` service (leftover; only relevant if you reactivate the crawler).
-- Root `railway.json` and `server.json` exist for additional Railway services.
+- Root `railway.json` builds the crawler worker (`scripts/worker/Dockerfile`) on Railway. Only relevant if the crawler is reactivated.
 
 ## Gotchas
 
