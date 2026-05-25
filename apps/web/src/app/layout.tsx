@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Instrument_Serif, Instrument_Sans, JetBrains_Mono } from "next/font/google";
+import { Instrument_Serif, Instrument_Sans, JetBrains_Mono, Figtree, Newsreader } from "next/font/google";
 import { getLocale } from "next-intl/server";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
@@ -23,6 +23,21 @@ const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains",
   subsets: ["latin"],
   display: "swap",
+});
+
+const figtree = Figtree({
+  variable: "--font-figtree",
+  subsets: ["latin"],
+  display: "swap",
+  weight: ["400", "500", "600", "700"],
+});
+
+const newsreader = Newsreader({
+  variable: "--font-newsreader",
+  subsets: ["latin"],
+  display: "swap",
+  weight: ["400", "500"],
+  style: ["normal", "italic"],
 });
 
 // Look for the "export const metadata" section right above your code
@@ -53,7 +68,7 @@ export default async function RootLayout({
         <meta name="theme-color" content="#FBFCFA" />
       </head>
       <body
-        className={`${instrumentSerif.variable} ${instrumentSans.variable} ${jetbrainsMono.variable} antialiased font-sans`}
+        className={`${instrumentSerif.variable} ${instrumentSans.variable} ${jetbrainsMono.variable} ${figtree.variable} ${newsreader.variable} antialiased font-sans`}
       >
         {children}
         <Analytics />
