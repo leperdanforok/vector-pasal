@@ -318,7 +318,7 @@ export default function Home() {
           {!isChatStarted && messages.length === 0 ? (
             <div className="vp-welcome">
               <div className="vp-welcome-icon">
-                <Icon name="scale" size={28} strokeWidth={1.5} />
+                <img src="/icon.png" alt="Vector Pasal" className="vp-logo-img" />
               </div>
               <div className="vp-welcome-label">Asisten Hukum AI</div>
               <h2 className="vp-welcome-heading">
@@ -338,7 +338,6 @@ export default function Home() {
                   </button>
                 ))}
               </div>
-              <div className="vp-welcome-footer">Vector Pasal v1.4 · Develop by Viddie Pilat</div>
             </div>
           ) : (
             <>
@@ -360,7 +359,7 @@ export default function Home() {
               ) : (
                 <div key={i} className="vp-message vp-message-ai">
                   <div className="vp-ai-avatar">
-                    <Icon name="scale" size={16} strokeWidth={1.5} />
+                    <img src="/icon.png" alt="Vector Pasal" className="vp-logo-img" />
                   </div>
                   <div className="vp-ai-body">
                     <span className="vp-ai-name">Vector Pasal</span>
@@ -385,7 +384,7 @@ export default function Home() {
               {loading && (
                 <div className="vp-message vp-message-ai">
                   <div className="vp-ai-avatar">
-                    <Icon name="scale" size={16} strokeWidth={1.5} />
+                    <img src="/icon.png" alt="Vector Pasal" className="vp-logo-img" />
                   </div>
                   <div className="vp-typing">
                     <div className="vp-typing-dots">
@@ -424,6 +423,7 @@ export default function Home() {
           </button>
         </form>
         <p className="vp-disclaimer">AI dapat membuat kesalahan. Verifikasi dengan dokumen resmi.</p>
+        <p className="vp-footer-credit">Vector Pasal v1.4 · Develop by Viddie Pilat</p>
       </div>
 
       {/* Document modal */}
@@ -529,7 +529,7 @@ export default function Home() {
             </div>
             <div className="vp-modal-body" style={{ textAlign: 'center' }}>
               <div className="vp-about-icon">
-                <Icon name="scale" size={28} strokeWidth={1.5} />
+                <img src="/icon.png" alt="Vector Pasal" className="vp-logo-img" />
               </div>
               <h3 className="vp-about-name">Vector Pasal</h3>
               <p className="vp-about-tagline">Smart Legal Assistant</p>
