@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai'; // <-- NEW SDK IMPORT
+import { SYSTEM_INSTRUCTION, buildRefinementPrompt, buildUserPrompt } from '@/lib/prompt';
 
 // 1. Initialize Supabase (Using the Service Role Key for backend access)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -16,17 +17,7 @@ export async function POST(req: Request) {
     const { query } = body;
 
     // 3. User Query Refinement & Embedding generation (Parallelized for P0)
-    const refinementPrompt = `
-    Tugas: Ubah pertanyaan warga berikut menjadi kata kunci pencarian hukum yang bersih.
-    - Perbaiki Saltik (typo).
-    - Ambil hanya subjek, tindakan, dan objeknya.
-    - Hilangkan kata tanya (berapa, apa, bagaimana).
-    - Output HANYA kata kunci utama, tanpa penjelasan.
-
-    Contoh: "denda mksimal membuang smpah di sungai" -> "denda membuang sampah sungai"
-    
-    Pertanyaan: "${query}"
-    `;
+    const refinementPrompt = buildRefinementPrompt(query);
 
     const [refinementResponse, embeddingResponse] = await Promise.all([
       ai.models.generateContent({
@@ -106,25 +97,9 @@ export async function POST(req: Request) {
     console.log("Formulating answer...");
 
     // 6. Ask Gemini 2.5 Flash to answer based ONLY on the context
-    const systemInstruction = `
-    Anda adalah Asisten AI hukum (Vector Pasal) untuk Satpol PP Kabupaten Bolaang Mongondow. 
-    Anda harus bersikap profesional, tegas, dan sangat akurat.
+    const systemInstruction = SYSTEM_INSTRUCTION;
 
-    TUGAS & ATURAN:
-    1. MENJAWAB PERTANYAAN HUKUM: Jawablah pertanyaan pengguna secara langsung dan akurat berdasarkan REFERENSI HUKUM yang diberikan.
-    2. IDENTIFIKASI SUMBER: Wajib sebutkan Nomor Perda dan Pasal sebagai referensi dalam jawaban Anda.
-    3. REFERENSI TIDAK DITEMUKAN: Jika pertanyaan bersifat hukum tetapi tidak ditemukan di REFERENSI HUKUM, katakan: "Mohon maaf, berdasarkan data Perda yang saya miliki saat ini, aturan tersebut tidak ditemukan."
-    4. GAYA BAHASA: Gunakan Bahasa Indonesia yang formal, ringkas, dan langsung pada intinya. Jangan menambahkan sapaan basa-basi kecuali jika pengguna memang hanya menyapa.
-    5. TEKNIS: Jika pengguna hanya menyapa (halo/hai), balas dengan sapaan singkat saja dan tanyakan apa yang bisa dibantu secara ringkas.
-    `;
-
-    const prompt = `
-    REFERENSI HUKUM:
-    ${contextText}
-    
-    PERTANYAAN:
-    ${query}
-    `;
+    const prompt = buildUserPrompt(contextText, query);
 
     // New SDK Syntax for Generating Content Stream
     const stream = await ai.models.generateContentStream({
