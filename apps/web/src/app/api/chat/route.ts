@@ -11,10 +11,17 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // 2. Initialize Gemini (New SDK Syntax)
 const ai = new GoogleGenAI({ apiKey: process.env.GOOGLE_API_KEY });
 
+// Run on the Node runtime and allow long streamed answers so a deployed instance
+// is not cut off at the default (short) serverless limit mid-generation.
+export const runtime = 'nodejs';
+export const maxDuration = 60;
+
+type ChatHistoryMessage = { role: 'user' | 'ai'; content: string };
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { query } = body;
+    const { query, history } = body as { query: string; history?: ChatHistoryMessage[] };
 
     // 3. User Query Refinement & Embedding generation (Parallelized for P0)
     const refinementPrompt = buildRefinementPrompt(query);
@@ -96,57 +103,114 @@ export async function POST(req: Request) {
 
     console.log("Formulating answer...");
 
-    // 6. Ask Gemini 2.5 Flash to answer based ONLY on the context
+    // 6. Ask Gemini 2.5 Flash to answer based ONLY on the context.
+    // Build a multi-turn `contents` array so the model has real conversation
+    // context: it answers follow-ups and only greets/introduces itself once
+    // (a fresh, history-less request is what made it re-greet every turn).
     const systemInstruction = SYSTEM_INSTRUCTION;
 
-    const prompt = buildUserPrompt(contextText, query);
+    const historyContents = (Array.isArray(history) ? history : [])
+      .filter((m) => m && typeof m.content === 'string' && m.content.trim())
+      .slice(-8) // bound tokens — keep only the most recent turns
+      .map((m) => ({
+        role: m.role === 'ai' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      }));
 
-    // New SDK Syntax for Generating Content Stream
-    const stream = await ai.models.generateContentStream({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-      config: {
-        systemInstruction: systemInstruction,
-        temperature: 0.2
-      }
-    });
+    // Only the final user turn carries the retrieved legal context.
+    const contents = [
+      ...historyContents,
+      { role: 'user', parts: [{ text: buildUserPrompt(contextText, query) }] },
+    ];
 
     // 7. Stream the answer AND the sources back to the frontend using NDJSON
     const encoder = new TextEncoder();
     const readable = new ReadableStream({
       async start(controller) {
-        let fullAnswer = "";
+        const send = (obj: unknown) =>
+          controller.enqueue(encoder.encode(JSON.stringify(obj) + '\n'));
+
+        // One streamed generation attempt. Returns the accumulated text plus any
+        // non-STOP finish reason (RECITATION/SAFETY/etc.) so the caller can react.
+        const runOnce = async (temperature: number) => {
+          let answer = '';
+          let blockReason = '';
+          const stream = await ai.models.generateContentStream({
+            model: 'gemini-2.5-flash',
+            contents,
+            config: { systemInstruction, temperature },
+          });
+          for await (const chunk of stream) {
+            const finishReason = chunk.candidates?.[0]?.finishReason;
+            if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
+              blockReason = finishReason;
+            }
+            if (chunk.promptFeedback?.blockReason) {
+              blockReason = chunk.promptFeedback.blockReason;
+            }
+            if (chunk.text) {
+              answer += chunk.text;
+              send({ type: 'text', data: chunk.text });
+            }
+          }
+          return { answer, blockReason };
+        };
 
         try {
-          // Stream the text first
-          for await (const chunk of stream) {
-            if (chunk.text) {
-              fullAnswer += chunk.text;
-              controller.enqueue(encoder.encode(JSON.stringify({ type: 'text', data: chunk.text }) + '\n'));
+          let { answer: fullAnswer, blockReason } = await runOnce(0.2);
+
+          // RECITATION/empty completions usually drop the whole candidate (no text
+          // streamed yet). Retry once at a slightly higher temperature — the
+          // project's documented mitigation — but only when nothing was streamed,
+          // so the user never sees duplicated text.
+          if (!fullAnswer.trim() && blockReason) {
+            console.error(`Gemini produced no text (finishReason=${blockReason}); retrying once at temp 0.4`);
+            ({ answer: fullAnswer, blockReason } = await runOnce(0.4));
+          }
+
+          // Still nothing → surface a specific, honest message instead of a silent
+          // "disconnect".
+          if (!fullAnswer.trim()) {
+            console.error(`Empty Gemini response after retry. finishReason=${blockReason || 'unknown'}`);
+            let msg: string;
+            if (blockReason === 'RECITATION') {
+              msg = 'Maaf, jawaban tidak dapat ditampilkan karena pembatasan kutipan teks (RECITATION). Silakan ubah atau persempit pertanyaan Anda.';
+            } else if (blockReason === 'SAFETY') {
+              msg = 'Maaf, jawaban diblokir oleh filter keamanan. Silakan ubah pertanyaan Anda.';
+            } else {
+              msg = 'Maaf, sistem tidak dapat menghasilkan jawaban saat ini. Silakan coba lagi.';
             }
+            send({ type: 'text', data: msg });
           }
 
           // 8. Dynamic Source Filtering (Post-Generation)
-          // Look for mentioned Pasals in the text (e.g., "Pasal 13", "Pasal 37")
+          // Only attach sources when the answer actually cites a Pasal — greetings,
+          // small talk and "tidak ditemukan" answers should show no source card.
           const citedPasals = Array.from(fullAnswer.matchAll(/Pasal\s*(\d+)/gi)).map(m => m[1]);
-          
-          let filteredMatches = matches.filter((m: any) => {
-            const pno = (m.metadata?.pasal || "").toString();
-            // Check if the pasal number from metadata appears in the cited list
-            return citedPasals.some(cp => pno === cp || pno.startsWith(cp + " ") || pno.startsWith(cp + " ayat"));
+
+          const filteredMatches = citedPasals.length > 0
+            ? matches.filter((m: any) => {
+                const pno = (m.metadata?.pasal || "").toString();
+                return citedPasals.some(cp => pno === cp || pno.startsWith(cp + " ") || pno.startsWith(cp + " ayat"));
+              })
+            : [];
+
+          const finalSources = filteredMatches.slice(0, 3);
+          if (finalSources.length > 0) {
+            send({ type: 'sources', data: finalSources });
+          }
+
+        } catch (err: any) {
+          // Surface the real cause in server logs; show a specific, friendly note.
+          console.error("Stream error:", err?.status ?? err?.code ?? '', err?.message ?? err);
+          const status = err?.status ?? err?.code;
+          const isQuota = status === 429 || /quota|rate.?limit|resource.?exhausted/i.test(String(err?.message ?? ''));
+          send({
+            type: 'text',
+            data: isQuota
+              ? 'Maaf, batas penggunaan API sedang penuh. Mohon tunggu sebentar lalu coba lagi.'
+              : 'Maaf, terjadi gangguan saat menghasilkan jawaban. Silakan coba lagi.',
           });
-
-          // Use filtered sources if found, otherwise fallback to top 3 relevant results
-          const finalSources = filteredMatches.length > 0 
-            ? filteredMatches.slice(0, 3) 
-            : matches.slice(0, 3);
-
-          // Send sources as the final chunk
-          controller.enqueue(encoder.encode(JSON.stringify({ type: 'sources', data: finalSources }) + '\n'));
-
-        } catch (err) {
-          console.error("Stream error:", err);
-          controller.enqueue(encoder.encode(JSON.stringify({ type: 'error', data: 'Error generating response' }) + '\n'));
         }
 
         controller.close();
@@ -161,7 +225,18 @@ export async function POST(req: Request) {
     });
 
   } catch (error: any) {
-    console.error("API Error:", error);
-    return NextResponse.json({ error: "Terjadi kesalahan pada server." }, { status: 500 });
+    // Pre-stream failure (refinement, embedding, or Supabase RPC). Log the real
+    // cause; differentiate quota so the disconnect is diagnosable.
+    const status = error?.status ?? error?.code;
+    console.error("API Error:", status ?? '', error?.message ?? error);
+    const isQuota = status === 429 || /quota|rate.?limit|resource.?exhausted/i.test(String(error?.message ?? ''));
+    return NextResponse.json(
+      {
+        error: isQuota
+          ? "Batas penggunaan API sedang penuh. Mohon tunggu sebentar lalu coba lagi."
+          : "Terjadi kesalahan pada server.",
+      },
+      { status: isQuota ? 429 : 500 },
+    );
   }
 }

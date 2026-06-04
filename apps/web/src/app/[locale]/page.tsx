@@ -182,6 +182,9 @@ export default function Home() {
     if (!q || loading) return;
 
     const userTime = getCurrentTime();
+    // Send the prior turns so the assistant has conversation context (answers
+    // follow-ups, greets only once). Keep it compact: last 8 turns, role+content.
+    const history = messages.slice(-8).map((m) => ({ role: m.role, content: m.content }));
     const baseMessages: Message[] = [...messages, { role: 'user', content: q, time: userTime }];
     setMessages(baseMessages);
     setQuery('');
@@ -191,7 +194,7 @@ export default function Home() {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q }),
+        body: JSON.stringify({ query: q, history }),
       });
       if (!response.ok) throw new Error('Terjadi kesalahan.');
 
