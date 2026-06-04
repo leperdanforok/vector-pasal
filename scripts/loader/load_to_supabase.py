@@ -457,9 +457,16 @@ def main():
                         help="Delete ALL existing data before loading")
     parser.add_argument("--dry-run", action="store_true",
                         help="Count what would be inserted without writing")
+    parser.add_argument("--seed-validity", action="store_true",
+                        help="Seed the Bolmong legal-validity relations + register, then exit")
     args = parser.parse_args()
 
     sb = get_sb()
+
+    if args.seed_validity:
+        seed_regulation_register(sb)
+        seed_bolmong_validity(sb)
+        return
 
     if args.force_reload:
         print("Force reload: clearing ALL existing data...")
@@ -569,6 +576,172 @@ def insert_relationships(sb):
             inserted += 1
 
     print(f"  Inserted {inserted} relationships")
+
+
+# --- Bolmong legal-validity seeding -----------------------------------------
+#
+# These relations are hand-verified legal data (sourced from each Perda's Ketentuan
+# Penutup). They drive the validity layer, so seeding MUST fail loud — a silent SKIP
+# on a URI typo would make the system quietly serve repealed law. Unlike the lenient
+# national-law `insert_relationships` above, every helper here RAISES on failure and
+# the seed asserts its expected row counts at the end.
+
+# FRBR URIs for the in-corpus works involved (must match works.frbr_uri exactly).
+_URI_WALET_2_2021 = "/akn/id/act/local/bolmong/peraturan-daerah-nomor-2-tahun-2021-tentang-pajak-sarang-burung-walet"
+_URI_PARKIR_4_2020 = "/akn/id/act/local/bolmong/peraturan-daerah-nomor-4-tahun-2020-tentang-retribusi-parkir-jalan"
+_URI_HKPD_1_2024 = "/akn/id/act/local/bolmong/peraturan-daerah-nomor-1-tahun-2024-tentang-pajak-dan-retribusi-daerah"
+
+# Known-but-absent regulations (no text in corpus) → regulation_register.
+_BOLMONG_REGISTER = [
+    {
+        "reg_type": "PERDA_KAB", "number": "20", "year": 2010,
+        "title": "Peraturan Daerah Kabupaten Bolaang Mongondow Nomor 20 Tahun 2010 tentang Retribusi Jasa Umum",
+        "lembaran_ref": "Lembaran Daerah Kabupaten Bolaang Mongondow Tahun 2010 Nomor 20",
+        "note": "Induk yang diubah oleh Perda 4/2020 (Parkir). Teks belum tersedia di korpus.",
+    },
+]
+
+# Work <-> work edges (both directions for repeal, per existing convention).
+_BOLMONG_WORK_EDGES = [
+    (_URI_HKPD_1_2024, _URI_WALET_2_2021, "mencabut"),
+    (_URI_WALET_2_2021, _URI_HKPD_1_2024, "dicabut_oleh"),
+    (_URI_HKPD_1_2024, _URI_PARKIR_4_2020, "mencabut"),
+    (_URI_PARKIR_4_2020, _URI_HKPD_1_2024, "dicabut_oleh"),
+]
+
+# Work -> register edges (target is a regulation_register entry, identified by key).
+_BOLMONG_REGISTER_EDGES = [
+    (_URI_PARKIR_4_2020, ("PERDA_KAB", "20", 2010), "mengubah"),
+]
+
+
+def seed_regulation_register(sb):
+    """Upsert the known-but-absent regulations into regulation_register (idempotent)."""
+    print("\nSeeding regulation_register...")
+    for entry in _BOLMONG_REGISTER:
+        sb.table("regulation_register").upsert(
+            entry, on_conflict="reg_type,number,year"
+        ).execute()
+        print(f"  OK: register {entry['reg_type']} {entry['number']}/{entry['year']}")
+
+
+def _work_id_by_uri(sb, uri: str) -> int:
+    res = sb.table("works").select("id").eq("frbr_uri", uri).execute()
+    if not res.data:
+        raise RuntimeError(f"Validity seed FAILED: work not found for FRBR URI {uri!r}")
+    return res.data[0]["id"]
+
+
+def _rel_type_id(sb, rel_code: str) -> int:
+    res = sb.table("relationship_types").select("id").eq("code", rel_code).execute()
+    if not res.data:
+        raise RuntimeError(f"Validity seed FAILED: relationship type {rel_code!r} not found")
+    return res.data[0]["id"]
+
+
+def _register_id(sb, reg_type: str, number: str, year: int) -> int:
+    res = (
+        sb.table("regulation_register").select("id")
+        .eq("reg_type", reg_type).eq("number", number).eq("year", year).execute()
+    )
+    if not res.data:
+        raise RuntimeError(
+            f"Validity seed FAILED: register entry not found for {reg_type} {number}/{year}"
+        )
+    return res.data[0]["id"]
+
+
+def upsert_register_relationship(sb, source_uri: str, register_key, rel_code: str) -> None:
+    """Strict: source work -> regulation_register edge. Raises on any resolution failure.
+
+    Uses check-then-insert (not upsert): the register uniqueness is enforced by a PARTIAL
+    unique index, which ON CONFLICT cannot infer from a column list.
+    """
+    reg_type, number, year = register_key
+    src_id = _work_id_by_uri(sb, source_uri)
+    reg_id = _register_id(sb, reg_type, number, year)
+    rel_id = _rel_type_id(sb, rel_code)
+
+    existing = (
+        sb.table("work_relationships").select("id")
+        .eq("source_work_id", src_id)
+        .eq("target_register_id", reg_id)
+        .eq("relationship_type_id", rel_id)
+        .execute()
+    )
+    if existing.data:
+        return  # idempotent
+
+    sb.table("work_relationships").insert(
+        {
+            "source_work_id": src_id,
+            "target_register_id": reg_id,
+            "relationship_type_id": rel_id,
+        }
+    ).execute()
+
+
+def upsert_work_relationship_strict(sb, source_uri: str, target_uri: str, rel_code: str) -> None:
+    """Strict: work -> work edge. Raises on any resolution failure (no silent SKIP)."""
+    sb.table("work_relationships").upsert(
+        {
+            "source_work_id": _work_id_by_uri(sb, source_uri),
+            "target_work_id": _work_id_by_uri(sb, target_uri),
+            "relationship_type_id": _rel_type_id(sb, rel_code),
+        },
+        on_conflict="source_work_id,target_work_id,relationship_type_id",
+    ).execute()
+
+
+def seed_bolmong_validity(sb):
+    """Seed the Bolmong repeal/amendment relations. Fails loud; asserts expected counts."""
+    print("\nSeeding Bolmong validity relations...")
+
+    for source_uri, target_uri, rel_code in _BOLMONG_WORK_EDGES:
+        upsert_work_relationship_strict(sb, source_uri, target_uri, rel_code)
+        print(f"  OK: {source_uri} -[{rel_code}]-> {target_uri}")
+
+    for source_uri, register_key, rel_code in _BOLMONG_REGISTER_EDGES:
+        upsert_register_relationship(sb, source_uri, register_key, rel_code)
+        print(f"  OK: {source_uri} -[{rel_code}]-> register {register_key[0]} {register_key[1]}/{register_key[2]}")
+
+    # Post-seed assertion: the validity layer must be complete, not partially seeded.
+    expected_work_edges = len(_BOLMONG_WORK_EDGES)        # 4
+    expected_register_edges = len(_BOLMONG_REGISTER_EDGES)  # 1
+    expected_register_rows = len(_BOLMONG_REGISTER)        # 1
+
+    work_edge_count = (
+        sb.table("work_relationships").select("id", count="exact")
+        .not_.is_("target_work_id", "null").execute().count
+    )
+    register_edge_count = (
+        sb.table("work_relationships").select("id", count="exact")
+        .not_.is_("target_register_id", "null").execute().count
+    )
+    register_row_count = (
+        sb.table("regulation_register").select("id", count="exact").execute().count
+    )
+
+    if work_edge_count < expected_work_edges:
+        raise RuntimeError(
+            f"Validity seed INCOMPLETE: {work_edge_count} work-edges present, "
+            f"expected at least {expected_work_edges}"
+        )
+    if register_edge_count < expected_register_edges:
+        raise RuntimeError(
+            f"Validity seed INCOMPLETE: {register_edge_count} register-edges present, "
+            f"expected at least {expected_register_edges}"
+        )
+    if register_row_count < expected_register_rows:
+        raise RuntimeError(
+            f"Validity seed INCOMPLETE: {register_row_count} register rows present, "
+            f"expected at least {expected_register_rows}"
+        )
+
+    print(
+        f"  Validity seed OK: {work_edge_count} work-edges, "
+        f"{register_edge_count} register-edges, {register_row_count} register rows"
+    )
 
 
 if __name__ == "__main__":

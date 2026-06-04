@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai'; // <-- NEW SDK IMPORT
 import { SYSTEM_INSTRUCTION, buildRefinementPrompt, buildUserPrompt } from '@/lib/prompt';
+import { tagValidity, classifyByValidity, decideAnswer, type ValidityInfo } from '@/lib/validity';
 
 // 1. Initialize Supabase (Using the Service Role Key for backend access)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -69,26 +70,82 @@ export async function POST(req: Request) {
     if (vectorResults.error) throw vectorResults.error;
     if (ftsResults.error) throw ftsResults.error;
 
-    // Merge and deduplicate by node ID
+    // Merge and deduplicate by node ID. Each row carries work_id (the vector RPC now returns
+    // it; the FTS RPC already did) — required for deterministic validity tagging.
     const seenIds = new Set<number>();
     const matches: any[] = [];
-
-    // Prioritize vector results but supplement with FTS/Trigram results
-    [...(vectorResults.data || []), ...(ftsResults.data || [])].forEach((match: any) => {
-      const id = match.node_id || match.id;
-      if (id && !seenIds.has(id)) {
-        seenIds.add(id);
-        matches.push({
-          ...match,
-          id, // unify ID field
-        });
+    const mergeRows = (rows: any[] | null | undefined, into: any[]) => {
+      for (const match of rows || []) {
+        const id = match.node_id || match.id;
+        if (id && !seenIds.has(id)) {
+          seenIds.add(id);
+          into.push({ ...match, id });
+        }
       }
+    };
+    mergeRows(vectorResults.data, matches);
+    mergeRows(ftsResults.data, matches);
+
+    // --- Legal-validity tagging (deterministic, NEVER the LLM) -------------------------
+    // Tag each matched node by its work's validity, then partition so the model is
+    // physically unable to answer from dead law when a live source exists.
+    const LIVE: ValidityInfo = { state: 'live' };
+    const validityMap = await tagValidity(matches.map((m) => m.work_id), supabase);
+    for (const m of matches) {
+      m.validity = (typeof m.work_id === 'number' && validityMap.get(m.work_id)) || LIVE;
+    }
+
+    const { live: liveMatches, repealedWithSuccessor: rsMatches, repealedNoSuccessor: rnMatches } =
+      classifyByValidity(matches);
+
+    // Force-fetch the live successor article(s) for any repealed_with_successor match. This is
+    // what closes the "0 live nodes but successor exists" hole: we re-run the sanction-aware
+    // hybrid search scoped to the successor work (reusing refinedQuery + queryVector) instead
+    // of ever feeding the dead node to the model.
+    const successorMatches: any[] = [];
+    const successorWorkIds = Array.from(new Set(
+      rsMatches
+        .map((m) => m.validity.repealedBy?.successorWorkId)
+        .filter((w): w is number => typeof w === 'number'),
+    ));
+    if (successorWorkIds.length > 0) {
+      const successorValidity = await tagValidity(successorWorkIds, supabase);
+      const fetched = await Promise.all(successorWorkIds.flatMap((wid) => [
+        supabase.rpc('search_legal_chunks', {
+          query_text: refinedQuery, match_count: 10, metadata_filter: { work_id: wid },
+        }),
+        supabase.rpc('match_legal_chunks', {
+          query_embedding: queryVector, match_threshold: 0.1, match_count: 10, filter_work_id: wid,
+        }),
+      ]));
+      for (const res of fetched) {
+        if (res.error) { console.error('Force-fetch successor failed:', res.error.message ?? res.error); continue; }
+        mergeRows(res.data, successorMatches);
+      }
+      for (const m of successorMatches) {
+        m.validity = (typeof m.work_id === 'number' && successorValidity.get(m.work_id)) || LIVE;
+      }
+    }
+
+    // Decide what the model may answer from (pure, deterministic, unit-tested).
+    const disposition = decideAnswer({
+      liveMatches,
+      successorLiveMatches: successorMatches.filter((m) => m.validity.state === 'live'),
+      repealedNoSuccessor: rnMatches,
+      repealedWithSuccessor: rsMatches,
     });
+    const answerNodes = disposition.answerNodes;
+    const gated = disposition.gated;
+    const responseState = disposition.responseState;
+    // successor_unretrieved: serve the notice and NO dead content.
+    const forcedMessage = responseState === 'successor_unretrieved'
+      ? `Aturan yang Anda tanyakan sudah tidak berlaku dan telah diperbarui oleh ${disposition.successorLabel}. Namun teks pasal penggantinya tidak berhasil saya tampilkan untuk pertanyaan ini. Mohon verifikasi langsung dengan Bagian Hukum Kabupaten Bolaang Mongondow.`
+      : null;
+    console.log(`Validity: live=${liveMatches.length} rs=${rsMatches.length} rn=${rnMatches.length} successorFetched=${successorMatches.length} -> responseState=${responseState}`);
 
-
-    // 5. Build the legal context for the AI (Token Trimmed)
-    const contextText = matches.length > 0 
-      ? matches.map((match: any) => {
+    // 5. Build the legal context for the AI from the ELIGIBLE nodes only (Token Trimmed).
+    const contextText = answerNodes.length > 0
+      ? answerNodes.map((match: any) => {
           const meta = match.metadata || {};
           const ref = `[Perda No ${meta.number || '?'}/${meta.year || '?'}, Pasal ${meta.pasal || '?'}]`;
 
@@ -157,6 +214,14 @@ export async function POST(req: Request) {
         };
 
         try {
+          // successor_unretrieved: a live successor is known to exist but we couldn't fetch
+          // its article. Serve the deterministic notice and NO dead content / sources.
+          if (forcedMessage) {
+            send({ type: 'text', data: forcedMessage });
+            controller.close();
+            return;
+          }
+
           let { answer: fullAnswer, blockReason } = await runOnce(0.2);
 
           // RECITATION/empty completions usually drop the whole candidate (no text
@@ -184,18 +249,40 @@ export async function POST(req: Request) {
           }
 
           // 8. Dynamic Source Filtering (Post-Generation)
-          // Only attach sources when the answer actually cites a Pasal — greetings,
-          // small talk and "tidak ditemukan" answers should show no source card.
+          // Hero sources are the cited ELIGIBLE (live / live-successor / gated) nodes — never
+          // a dead repealed_with_successor node. Greetings / "tidak ditemukan" cite nothing →
+          // no card. Each source carries its `validity` for the UI to render deterministically.
           const citedPasals = Array.from(fullAnswer.matchAll(/Pasal\s*(\d+)/gi)).map(m => m[1]);
+          const isCited = (m: any) => {
+            const pno = (m.metadata?.pasal || "").toString();
+            return citedPasals.some(cp => pno === cp || pno.startsWith(cp + " ") || pno.startsWith(cp + " ayat"));
+          };
 
-          const filteredMatches = citedPasals.length > 0
-            ? matches.filter((m: any) => {
-                const pno = (m.metadata?.pasal || "").toString();
-                return citedPasals.some(cp => pno === cp || pno.startsWith(cp + " ") || pno.startsWith(cp + " ayat"));
-              })
+          const heroSources = citedPasals.length > 0
+            ? answerNodes.filter(isCited).slice(0, 3)
             : [];
 
-          const finalSources = filteredMatches.slice(0, 3);
+          // Demote a repealed reference only when the live answer comes from ITS successor —
+          // i.e. "the older version of what you're reading". This shows the Walet 2/2021 ref
+          // under a 1/2024 walet answer, but suppresses unrelated repealed matches (e.g. a
+          // stray walet Pasal pulled into a narkotika answer by lenient recall).
+          const heroWorkIds = new Set(heroSources.map((m: any) => m.work_id));
+          const demotedSources = (!gated && heroSources.length > 0)
+            ? rsMatches
+                .filter((m: any) => {
+                  const sid = m.validity.repealedBy?.successorWorkId;
+                  return typeof sid === 'number' && heroWorkIds.has(sid);
+                })
+                .slice(0, 3)
+            : [];
+
+          const toSource = (m: any) => ({
+            content: m.content || m.content_text || '',
+            metadata: m.metadata,
+            validity: m.validity,
+          });
+
+          const finalSources = [...heroSources, ...demotedSources].map(toSource);
           if (finalSources.length > 0) {
             send({ type: 'sources', data: finalSources });
           }
