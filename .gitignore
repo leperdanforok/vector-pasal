@@ -31,4 +31,15 @@ Thumbs.db
 
 # Graphify
 graphify-out/
-.gstack/
+
+# Scratch / experiments
+scratch/
+
+# OCR pipeline logs (smart_ocr / chunk_ocr stdout dumps)
+*.log
+ocr_pipeline_log.txt
+
+# Local ingestion data (PDFs, OCR transcriptions, parsed JSON)
+data/raw_pdf/
+data/transcriptions/
+data/parsed/

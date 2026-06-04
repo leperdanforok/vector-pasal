@@ -12,6 +12,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -53,6 +54,23 @@ def init_supabase():
     return get_sb()
 
 
+_MD_HEADING_RE = re.compile(r'^#+[ \t]+', flags=re.MULTILINE)
+_MD_BOLD_RE = re.compile(r'\*\*([^*\n]+)\*\*')
+
+
+def _normalize_markdown_for_parser(text: str) -> str:
+    """Strip Markdown formatting so the legal-text parser finds BAB/Pasal markers.
+
+    smart_ocr.py emits Markdown (``## BAB I``, ``### Pasal 1``, ``**bold**``),
+    but parse_structure.py expects raw text (``BAB I`` / ``Pasal 1`` on their
+    own lines). Without this, every transcribed Perda parses as one giant
+    undifferentiated node and search is broken.
+    """
+    text = _MD_HEADING_RE.sub('', text)
+    text = _MD_BOLD_RE.sub(r'\1', text)
+    return text
+
+
 def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
     """Extract text from PDF, correct OCR errors, parse structure.
 
@@ -77,6 +95,7 @@ def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
     if transcription_path.exists():
         print(f"   [Found Transcription] Loading {transcription_path.name}")
         text = transcription_path.read_text(encoding="utf-8")
+        text = _normalize_markdown_for_parser(text)
         stats = {"page_count": "?", "char_count": len(text), "source": "manual_transcription"}
     else:
         text, stats = extract_text_pymupdf(pdf_path)
