@@ -1,6 +1,6 @@
 # Vector Pasal — Session Handoff
 
-*Last session: 2026-06-04 (chat behavior fixes). Prior: 2026-05-25 (ingestion+cleanup AM, redesign PM).*
+*Last session: 2026-06-04 (legal-validity layer + chat behavior fixes). Prior: 2026-05-25 (ingestion+cleanup AM, redesign PM).*
 
 ## Project goals
 
@@ -9,6 +9,34 @@ AI legal-assistant RAG for **Satpol PP Kabupaten Bolaang Mongondow**. Indonesian
 This repo is a Bolmong-narrowed **fork of [pasal.id](https://pasal.id)**. ~40% of the codebase is leftover scaffolding from the original general-purpose Indonesian legal database. Active vs. leftover map lives in [CLAUDE.md](CLAUDE.md).
 
 ## Current state
+
+### What landed this session (2026-06-04 PM) — legal-validity layer (derivation phase)
+
+The corpus contained **repealed** Perda served as if live: **Perda 1/2024 (HKPD) Pasal 122 repealed both Perda 2/2021 (Walet) and Perda 4/2020 (Parkir)**; Parkir 4/2020 also amends Perda 20/2010 (no text in corpus). Built a validity layer where **status is derived in code from `work_relationships`, never by the LLM**. Committed on branch **`feat/legal-validity-layer`** (`061166f`), **not yet pushed / no PR**.
+
+**Migrations 060–064 (all applied to the live `Pasal-Bolmong` Supabase project `vjtdzmixoecmfshfydwr`):**
+- `060` `regulation_register` — known-but-absent regs (table for the `out_of_coverage` state).
+- `061` `work_relationships` gains nullable `target_register_id` + `chk_one_target` CHECK; partial unique index `uq_rel_register`; `works.status` commented as **NOT authoritative** for validity.
+- `062` `match_legal_chunks` recreated (atomic DROP/CREATE) to return `work_id` + accept optional `filter_work_id`. **Signature is now 4-arg** (4th optional) and returns an extra `work_id` column — backward-compatible with the deployed 3-arg call.
+- `063` `search_legal_chunks` accepts a `work_id` key in `metadata_filter` (sanction-aware force-fetch scope). Signature unchanged.
+- `064` `get_repeal_facts(work_ids)` — returns raw repeal facts; **state mapping stays in TS**, not SQL.
+
+**Seeded** via `./venv/Scripts/python.exe scripts/loader/load_to_supabase.py --seed-validity` — strict, **fail-loud** (raises on any URI miss, never silent SKIP) with a post-seed row-count assertion. Result: **4 work↔work edges + 1 work→register edge + 1 register row** (Perda 20/2010). Re-runnable/idempotent.
+
+**Derivation + answer safety:**
+- [apps/web/src/lib/validity.ts](apps/web/src/lib/validity.ts) — `tagValidity()` (live / repealed_with_successor / repealed_no_successor) + pure `classifyByValidity` / `decideAnswer` helpers.
+- [apps/web/src/app/api/chat/route.ts](apps/web/src/app/api/chat/route.ts) — tags matches, then the **answer-safety partition**: a dead `repealed_with_successor` node is **never** fed to the LLM even when 0 live nodes were retrieved; the successor article is **force-fetched** (retrieval scoped to `successorWorkId`); if still unfound → **`successor_unretrieved`** (serves a "verify with Bagian Hukum" notice, **no dead content**). Sanction-expanded nodes obey the same rule. Demoted repealed refs shown only when the live answer is from *their* successor. Each `sources` item now carries `validity`.
+- [apps/web/src/lib/prompt.ts](apps/web/src/lib/prompt.ts) — `SYSTEM_INSTRUCTION` forbids the LLM from asserting in-force/repealed/amended status.
+
+**Verified live (dev server against migrated+seeded DB):**
+- Walet query → answers from **live 1/2024 Pasal 56**; 2/2021 walet Pasals demoted `repealed_with_successor`.
+- **Parkir query (the dangerous one)** → answers from live 1/2024 / honest "tidak ditemukan"; **no dead flat-tariff leak** (Rp2.000–8.000).
+- Narkotika (live-only) → 6/2025 Pasal 25 live, no stray demoted ref.
+- `npm run test` 52/52 (incl. `validity.test.ts` 10 tests with the `successor_unretrieved` hole case); `tsc` clean in `src/`.
+
+**Deferred to next phase (NOT built):** the four UI treatments + the `repealed_no_successor` "Saya paham" acknowledgment gate, and the automatic `out_of_coverage` chat trigger (register search). The data contract (`source.validity`) is ready for the UI to consume. Plan: `~/.claude/plans/hi-i-just-paid-quizzical-torvalds.md`.
+
+**Note:** the deployed Vercel app does NOT yet have this route behavior — only ships on the next deploy. Migrations are backward-compatible so production chat keeps working in the meantime.
 
 ### What landed this session (2026-06-04) — chat behavior fixes
 
