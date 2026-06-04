@@ -1,6 +1,6 @@
 # Vector Pasal — Session Handoff
 
-*Last session: 2026-05-25 (two sessions on the same day — ingestion+cleanup AM, redesign PM)*
+*Last session: 2026-06-04 (chat behavior fixes). Prior: 2026-05-25 (ingestion+cleanup AM, redesign PM).*
 
 ## Project goals
 
@@ -10,7 +10,30 @@ This repo is a Bolmong-narrowed **fork of [pasal.id](https://pasal.id)**. ~40% o
 
 ## Current state
 
-### What landed this session (2026-05-25)
+### What landed this session (2026-06-04) — chat behavior fixes
+
+First post-launch testing on a **paid Gemini key**. User reported three issues; all fixed on `redesign/vp-chat-shell` (commit `fix(chat): conversation memory, scoped sources, observable errors`).
+
+1. **Assistant re-greeted on every message.** Root cause: the chat was stateless — the client POSTed only the latest message, so Gemini saw every turn as turn 1 and re-introduced itself.
+   - [page.tsx](apps/web/src/app/[locale]/page.tsx) `submitQuery` now sends the last 8 turns as `history` (`{ role, content }`) in the POST body.
+   - [route.ts](apps/web/src/app/api/chat/route.ts) builds a multi-turn Gemini `contents` array (history mapped to `user`/`model` roles; retrieval context injected only on the final user turn via `buildUserPrompt`).
+   - [prompt.ts](apps/web/src/lib/prompt.ts) gained a "Konteks Percakapan" rule: greet/introduce **only at conversation start**, and use history for follow-ups ("kalau sanksinya?").
+2. **"Sumber Dokumen" card appeared on every reply** — even for "halo". Root cause: step 8 unconditionally fell back to `matches.slice(0,3)`, and the vector search threshold is a very lenient `0.1`, so any input returned matches. Fix: sources now stream **only when the answer actually cites a Pasal** (`citedPasals.length > 0` → `filteredMatches.slice(0,3)`, else nothing). UI already hides empty sources.
+3. **Intermittent "disconnect"** — user confirmed it showed an *error message* (handled error, not a true network drop) whose generic wording hid the cause. Fixes in [route.ts](apps/web/src/app/api/chat/route.ts):
+   - Inspect each chunk's `finishReason`/`promptFeedback.blockReason`; on **RECITATION/empty** completion, **retry once at temp 0.4** (the project's documented mitigation) — only when no text was streamed yet, so the user never sees duplicated text.
+   - Specific Indonesian messages for RECITATION / SAFETY / quota (429) instead of one generic string; full cause is `console.error`-logged both in-stream and in the outer catch.
+   - Added `export const runtime = 'nodejs'` and `export const maxDuration = 60` so a deployed instance isn't cut off mid-stream at the default serverless limit.
+   - **Leading suspect for the disconnect is a mid-stream RECITATION block** (corpus is RECITATION-prone; route ran `flash` @ temp 0.2 with no block handling). The new logging will confirm on next repro — watch the `npm run dev` console for the `finishReason=` line.
+
+**Verification:** `npm run test` 42/42 pass; `npx tsc --noEmit` clean. `npm run lint` errors are all pre-existing in leftover code (`reader/`, `suggestions/`, `mcp-demo/`) — none in the three touched files.
+
+### Intervening commits since the 2026-05-25 redesign (not previously logged)
+
+- `5246c5f feat: refine chat shell with bolder "Institutional Confidence" look` — design language now codified in memory as serif headlines + deep green/brass; reuse `--vp-*` tokens, don't add new accents.
+- `264b098 chore: add skills tooling (skills-lock.json, ignore .gstack/)`.
+- `442bb21 refactor: extract chat prompts to lib/prompt.ts; make system prompt conversational` — `SYSTEM_INSTRUCTION`, `buildRefinementPrompt`, `buildUserPrompt` moved to [apps/web/src/lib/prompt.ts](apps/web/src/lib/prompt.ts) as the single source of truth for chatbot voice. **Edit prompts there, not in route.ts.**
+
+### What landed earlier (2026-05-25)
 
 **Tier-1 corpus fully ingested into Supabase:**
 
