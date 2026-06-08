@@ -48,7 +48,10 @@ Single test: `npx vitest run src/lib/__tests__/parse-slug.test.ts`
 .\venv\Scripts\python.exe scripts/loader/smart_ocr.py        # OCR new PDFs in data/raw_pdf/ → data/transcriptions/
 .\venv\Scripts\python.exe scripts/load_perda_bolmong.py      # Parse, embed, upsert into Supabase
 # --dry-run on load_perda_bolmong.py parses without writing
+.\venv\Scripts\python.exe scripts/loader/load_to_supabase.py --seed-validity  # Seed validity relations (strict, fail-loud)
 ```
+**Embedding the text is only step 1 of 3.** A Perda is not "ingested" until validity relations are mapped — see [Ingesting a new Perda — Definition of Done](#ingesting-a-new-perda--definition-of-done) below. Skipping the validity step silently reintroduces dead-law-served-as-live, the exact bug the validity layer prevents.
+
 Fresh start (Supabase SQL Editor):
 ```sql
 TRUNCATE TABLE work_relationships, document_nodes, works RESTART IDENTITY CASCADE;
@@ -62,6 +65,32 @@ python -m pytest test_server.py -v
 
 ### Crawler worker (leftover, run from repo root)
 Documented in [scripts/CLAUDE.md](scripts/CLAUDE.md). Don't extend without confirming the user actually wants the crawler path.
+
+## Ingesting a new Perda — Definition of Done
+
+A Perda is **NOT "ingested" until steps 1–3 are all complete.** Step 2 is the one most likely to be skipped because the system *looks* finished after step 1 — but skipping it silently reintroduces dead-law-served-as-live, the exact bug the validity layer exists to prevent. Embedding without relations is **dangerous, not partial.**
+
+### Step 1 — Embed the text (technical, delegable to the pipeline)
+- [ ] Drop PDF in `data/raw_pdf/`, run `smart_ocr.py`, then `load_perda_bolmong.py`.
+- [ ] Verify the pasal count printed to stdout matches the actual Perda (catches truncated/blob parses).
+- [ ] Spot-check that numbers/tariffs survived OCR — compare a few against the source scan, especially rupiah figures and cross-references ("sebagaimana dimaksud Pasal X").
+
+### Step 2 — Map validity relations (MANDATORY — legal work, human only, NEVER inferred by the LLM)
+- [ ] Read the new Perda's **Ketentuan Penutup**. Does it repeal (`mencabut`) or amend (`mengubah`) anything?
+- [ ] For each repeal/amend, add the edge to `work_relationships` (`mencabut`/`dicabut_oleh`, `mengubah`/`diubah_oleh`) via the **strict, fail-loud loader path** — add entries to `_BOLMONG_WORK_EDGES` / `_BOLMONG_REGISTER` / `_BOLMONG_REGISTER_EDGES` in [scripts/loader/load_to_supabase.py](scripts/loader/load_to_supabase.py), then run `load_to_supabase.py --seed-validity`. Never hand-insert via SQL — the strict loader raises on any URI miss instead of SKIPping.
+- [ ] If the new Perda is itself repealed/amended by something **not in the corpus** → add that other regulation to `regulation_register` (the `out_of_coverage` source) and point the edge at it.
+- [ ] **Reverse check (easy to miss):** does anything already in the corpus get repealed/amended by this new Perda, or vice versa? A newer Perda most often changes the validity map of *older* ones — re-examine, don't assume.
+- [ ] Re-run the seed; confirm the **post-seed edge-count assertion** passes (it fails the step if short).
+
+### Step 3 — Add gold cases (JUDGMENT — only for high-stakes content)
+- [ ] Ask: does this Perda introduce a number (tariff/fine/sanction), a repeal/amend relation, or cover a high-enforcement domain (trantibum, ketertiban umum)?
+- [ ] If yes → add 1–2 cases to [apps/web/gold/cases.ts](apps/web/gold/cases.ts) targeting the sharpest points. Fill `expected.*` by **reading the Perda** (never auto-populate). Add `must_not_contain` for any dead figure that must never resurface. Run `npm run test:gold`.
+- [ ] If the Perda is purely administrative with no enforcement numbers → no gold case. Don't pad the suite.
+
+### Never
+- **Never** let the LLM decide repeal/validity status — it comes from `work_relationships` only, rendered deterministically in code ([apps/web/src/lib/validity.ts](apps/web/src/lib/validity.ts)).
+- **Never** mark ingest "done" after step 1 alone.
+- **Never** auto-fill gold `expected.*` to make a test pass — a red test from a wrong retrieval is a *finding*, not a nuisance.
 
 ## Architecture: the chat request
 
@@ -90,6 +119,7 @@ There is **no separate chunks table**. The single source of truth for retrieval 
 - `search_legal_chunks()` only queries content-bearing node types (`pasal`, `ayat`, `preamble`, `content`, `aturan`, `penjelasan_umum`, `penjelasan_pasal`) — structural nodes (`bab`, `bagian`, `paragraf`) are skipped.
 - `works` holds regulation metadata (type, number, year, region, slug, source_pdf_url).
 - `regulation_types` is loaded lazily and cached. Bolmong content is `PERDA_KAB`.
+- **Validity layer (active):** `work_relationships` holds repeal/amend edges between works (or to a `regulation_register` entry for known-but-absent regulations); these are the **single source of truth for legal validity**, never the LLM. Retrieval tags each result via `get_repeal_facts()` → [apps/web/src/lib/validity.ts](apps/web/src/lib/validity.ts), and the chat route withholds repealed-but-superseded articles from the model. `works.status` is **not** authoritative (commented as such in the schema). See the ingestion Definition of Done above.
 - The crawler-era tables (`crawl_jobs`, `discovery_progress`, `scraper_runs`, `pdf_tracking`) exist in the schema but are unused by the Bolmong ingestion flow.
 
 ## Web app shape
