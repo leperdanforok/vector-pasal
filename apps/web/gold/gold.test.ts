@@ -11,7 +11,7 @@
  */
 import { describe, it, beforeAll, afterAll, expect } from 'vitest';
 import { goldCases, TODO } from './cases';
-import { runCase } from './runner';
+import { runCaseWithRetry, UpstreamUnavailableError } from './runner';
 
 const BASE = process.env.GOLD_BASE_URL ?? 'http://localhost:3000';
 const isTodo = (v: unknown): v is typeof TODO => v === TODO;
@@ -40,9 +40,20 @@ describe(`gold set @ ${BASE}`, () => {
   });
 
   for (const c of goldCases) {
-    it(c.id, async () => {
-      // Single request per case — reuse both the answer text and the sources frame.
-      const { answerText, sources } = await runCase(BASE, c.query);
+    it(c.id, async (ctx) => {
+      // Single request per case (with bounded retries). A persistent upstream failure
+      // (e.g. Gemini 503) SKIPs the case — a red gold case must mean a real regression.
+      let answerText: string;
+      let sources: Awaited<ReturnType<typeof runCaseWithRetry>>['sources'];
+      try {
+        ({ answerText, sources } = await runCaseWithRetry(BASE, c.query));
+      } catch (e) {
+        if (e instanceof UpstreamUnavailableError) {
+          ctx.skip(`upstream unavailable (transient — re-run later): ${e.message}`);
+          return;
+        }
+        throw e;
+      }
 
       // 1) SAFETY — forbidden strings must never appear in the answer. Fails loud.
       for (const forbidden of c.must_not_contain) {

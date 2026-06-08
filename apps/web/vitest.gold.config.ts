@@ -11,8 +11,8 @@ export default defineConfig({
   },
   test: {
     include: ["gold/**/*.test.ts"],
-    // Real LLM round-trips per case — give each test room.
-    testTimeout: 120_000,
+    // Real LLM round-trips per case, plus up to 2 retries on transient upstream (Gemini 503).
+    testTimeout: 180_000,
     hookTimeout: 30_000,
   },
 });
