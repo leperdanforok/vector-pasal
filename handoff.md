@@ -67,8 +67,8 @@ First post-launch testing on a **paid Gemini key**. User reported three issues; 
 
 | Perda | Path | Pasals | OCR method |
 |-------|------|--------|------------|
-| 4/2020 Retribusi Parkir | inline | 3 | older smart_ocr run |
-| 2/2021 Pajak Sarang Burung Walet | inline (7MB) | 34 | Pro+0.4 |
+| 4/2020 Retribusi Parkir *(repealed by 1/2024 — see validity layer)* | inline | 3 | older smart_ocr run |
+| 2/2021 Pajak Sarang Burung Walet *(repealed by 1/2024)* | inline (7MB) | 34 | Pro+0.4 |
 | 1/2024 Pajak & Retribusi Daerah | chunked (42MB) | 125 | [chunk_ocr_perda1.py](scripts/loader/chunk_ocr_perda1.py) |
 | 6/2025 Pencegahan Narkotika | inline (11MB) | 56 | Pro+0.4 |
 
@@ -124,16 +124,16 @@ User opened a design package URL from Anthropic Claude Design (`https://api.anth
 - **OCR pipeline (smart_ocr.py)** — Gemini 2.5 Pro at temp 0.4 with softened prompt, 3-attempt retry loop (5s/15s/30s) for transient 503/429. Handles both inline (<20MB) and File API (≥20MB) paths.
 - **Chunked OCR fallback** — `chunk_ocr_perda1.py` splits 42MB PDFs into 10-page slices, OCRs each, concatenates. Per-chunk markdown cache makes re-runs idempotent.
 - **Markdown→raw-text normalizer** — `_normalize_markdown_for_parser()` in [load_to_supabase.py](scripts/loader/load_to_supabase.py) strips `#+ ` heading prefixes and `**bold**` so `parse_structure.py` can find BAB/Pasal markers.
-- **Hybrid retrieval + sanction expansion** (migration 059) — confirmed at ingestion level; not re-dogfooded since the ingestion fix landed.
+- **Hybrid retrieval + sanction expansion** (migration 059) — confirmed at ingestion level and re-exercised end-to-end during the 2026-06-04 validity work (walet/parkir/narkotika).
 - **Memory persistence** — three structured memories saved with the non-obvious lessons: `bolmong-corpus-tier1`, `gemini-recitation-mitigation`, `markdown-parser-normalization`.
 
 ## What's blocked / not yet done
 
-- **Manual chatbot dogfood not run** post-ingestion. Sanity queries to fire before merging the cleanup PR:
-  - *"Berapa tarif pajak sarang burung walet?"* → expect Perda 2/2021 Pasal 6 citation (10%)
-  - *"Apa sanksi jika tidak melaporkan SPTPD?"* → expect Perda 2/2021 Pasal 33 citation (also tests sanction expansion)
-  - *"Apa kewajiban pemilik hotel terkait narkotika?"* → expect Perda 6/2025 Pasal 25
-  - *"Bagaimana retribusi parkir dihitung?"* → expect Perda 4/2020
+- **Sanity queries** (validity-correct expectations; codified in the gold set — see `apps/web/gold/`):
+  - *"Berapa tarif pajak sarang burung walet?"* → live **Perda 1/2024 Pasal 56** (10%). Perda **2/2021 appears only as a demoted `repealed_with_successor` reference**, never as the answer.
+  - *"Apa sanksi jika tidak melaporkan SPTPD?"* → the **live** answer from **Perda 1/2024** (exact Pasal = legal ground truth, TBD). NOT 2/2021 Pasal 33 — that sanction lives in a repealed work.
+  - *"Apa kewajiban pemilik hotel terkait narkotika?"* → **Perda 6/2025 Pasal 25** (live; unchanged).
+  - *"Bagaimana retribusi parkir dihitung?"* → live **Perda 1/2024** (PBJT/retribusi). Must **NOT** return Perda 4/2020's flat tariffs (Rp2.000–8.000) — those are repealed.
 - **Wave 1 PR not yet opened** — `gh` CLI is not installed, so user must open via the URL above.
 - **Wave 2 cleanup deferred** — leftover web routes (`/jelajahi`, `/peraturan`, `/topik`, `/search`, `/admin/*`) and their corresponding components/API routes. Plan exists in [VECTOR_PASAL_CLEANUP_PLAN.md](VECTOR_PASAL_CLEANUP_PLAN.md).
 - **Lint baseline**: 26 errors + 15 warnings in `apps/web` — all in leftover code (`suggestions/`, `reader/`, `mcp-demo/`). Will go away naturally as Waves 2-3 delete those surfaces.
@@ -186,7 +186,7 @@ After Wave 2, lint errors should drop to near-zero (the 26 current errors all li
 
 - **RECITATION block on Gemini OCR?** → Pro model + temp 0.4 + soften "transcribe verbatim" to "extract for indexing". If still blocked at large scale → chunk into 10-page slices. Don't waste retries at the same scale; RECITATION is content-overlap-based, not sampling-randomness-based.
 - **New transcribed Perda parsing as 1 blob with 0 pasals?** → The markdown normalizer in `load_to_supabase.py` is the load-bearing piece. If you change `smart_ocr.py` to emit new Markdown constructs (lists, tables, blockquotes), confirm the normalizer still produces parser-compatible output.
-- **Adding Perdas?** → Drop PDF in `data/raw_pdf/`, run `smart_ocr.py`, then `load_perda_bolmong.py`. Verify pasal count matches expectation (it's printed to stdout). Trantibum (Perda 3/2023) and parkir (Perda 4/2020) PDFs are NOT in `data/raw_pdf/` so they stay untouched on re-runs.
+- **Adding Perdas?** → Drop PDF in `data/raw_pdf/`, run `smart_ocr.py`, then `load_perda_bolmong.py`. Verify pasal count matches expectation (it's printed to stdout). All current corpus PDFs (1/2024, 2/2021, 4/2020, 6/2025) are in `data/raw_pdf/` with transcription caches in `data/transcriptions/`, so `smart_ocr.py` skips them on re-run. Trantibum 3/2023 is already ingested (work id 2, 178 nodes) via its cached transcription; its PDF is not in `data/raw_pdf/`.
 
 ### Don't trip on these
 
