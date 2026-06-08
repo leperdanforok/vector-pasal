@@ -15,7 +15,10 @@ const withSerwist = withSerwistInit({
 
 const nextConfig: NextConfig = {
   experimental: {
-    turbopackFileSystemCacheForBuild: true,
+    // turbopackFileSystemCacheForBuild was disabled — its persistent cache intermittently
+    // dropped Node-runtime API routes (/api/chat, /api/v1/*) from the dev route tree, causing
+    // hard-to-debug 404s. Re-enable only if builds need it and the route-registration bug is
+    // confirmed fixed upstream.
     optimizePackageImports: ["lucide-react", "framer-motion"],
   },
   images: {
