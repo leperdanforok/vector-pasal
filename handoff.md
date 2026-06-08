@@ -1,6 +1,6 @@
 # Vector Pasal — Session Handoff
 
-*Last session: 2026-06-04 (legal-validity layer + chat behavior fixes). Prior: 2026-05-25 (ingestion+cleanup AM, redesign PM).*
+*Last session: 2026-06-08 (gold-set harness + ingest DoD + dev-route fix). Prior: 2026-06-04 (legal-validity layer + chat behavior fixes); 2026-05-25 (ingestion+cleanup AM, redesign PM).*
 
 ## Project goals
 
@@ -9,6 +9,25 @@ AI legal-assistant RAG for **Satpol PP Kabupaten Bolaang Mongondow**. Indonesian
 This repo is a Bolmong-narrowed **fork of [pasal.id](https://pasal.id)**. ~40% of the codebase is leftover scaffolding from the original general-purpose Indonesian legal database. Active vs. leftover map lives in [CLAUDE.md](CLAUDE.md).
 
 ## Current state
+
+### What landed this session (2026-06-08) — gold-set regression harness + ingest DoD + dev-route fix
+
+All on branch **`feat/legal-validity-layer`** (pushed; PR still not opened). Latest commit `8599366`.
+
+**1. Gold-set regression harness** (`cd9d353`) — `apps/web/gold/`: runs the **real** `/api/chat` pipeline against known-correct answers so validity can't silently regress. Opt-in via **`npm run test:gold`** (needs a running app at `GOLD_BASE_URL`, default `:3000`; real Gemini calls). Kept out of the default 52-test suite (`vitest.config.ts` excludes `gold/**`; separate `vitest.gold.config.ts`).
+- [gold/cases.ts](apps/web/gold/cases.ts) — `GoldCase` schema + `TODO(viddie)` sentinel for legal ground truth the maintainer authors. `must_not_contain` supports `re:` regex. **Never auto-fill `expected.*`.**
+- [gold/runner.ts](apps/web/gold/runner.ts) — HTTP POST + NDJSON parse. **Hardened (`8599366`)**: detects transient upstream failures (5xx / empty answer / the route's streamed error notices), retries with backoff (`runCaseWithRetry`), and the test **skips** (not fails) if it persists — a red gold case means a real regression, never "Gemini 503".
+- [gold/gold.test.ts](apps/web/gold/gold.test.ts) — safety (`must_not_contain`) always runs; ground-truth runs only when filled, else skipped with an `afterAll` warning.
+
+**2. Ingest "Definition of Done"** (`28b93be`) — added to [CLAUDE.md](CLAUDE.md#ingesting-a-new-perda--definition-of-done): the 3-step gate (embed → **map validity relations (mandatory, human-only)** → gold cases for high-stakes content). Plus a validity-layer note in the data-model section. handoff "Adding Perdas?" recipe now defers to it. This is the user's own rule set — step 2 is the one most likely skipped, and skipping it reintroduces dead-law-served-as-live.
+
+**3. handoff sync** (`cd9d353`) — corrected the four sanity-query expectations to validity-correct answers (live 1/2024, not repealed 2/2021/4/2020); fixed the "Adding Perdas?" recipe (parkir PDF *is* in `data/raw_pdf/`; Trantibum *is* ingested); dropped the stale "not re-dogfooded" line; marked 2/2021 & 4/2020 repealed in the corpus table.
+
+**4. Dev-route 404 fix** (`d0ec225`) — disabled `experimental.turbopackFileSystemCacheForBuild` in [next.config.ts](apps/web/next.config.ts). That experimental persistent cache intermittently dropped Node-runtime API routes (`/api/chat`, `/api/v1/*`) from the dev route tree → 404s/empty responses that looked like app/test failures; clearing `.next` only fixed it sometimes. **Recurring gotcha:** if API routes 404 in dev, it's this (now fixed); the older fallback was `Remove-Item -Recurse -Force .next` + restart.
+
+**Gold run status (verified live):** walet → 1/2024 Pasal 56 ✅ · narkotika → 6/2025 Pasal 25 ✅ · sptpd → 1/2024 Pasal 116 ✅ (cites the live ketentuan pidana; dead "6 (enam) bulan" term absent) · **parkir → RED (open finding)**.
+
+**OPEN — parkir gold case (`parkir-tarif`), needs the user's legal read of Perda 1/2024.** Expected `Pasal 82` (on-street *tingkat penggunaan jasa*, Retribusi Jasa Umum), but the pipeline cites **75 / 87 / 84** (generic "dihitung" query) or **76** ("tepi jalan" query) — never 82. Decide: is 82 correct and a **retrieval gap**, should the gold `query` target what 82 covers, or is a broader pasal (75/76) the right expectation? Dead-tariff safety regex passed in all variants (no Rp2.000–8.000 leak). [apps/web/gold/cases.ts](apps/web/gold/cases.ts) is **left uncommitted** (user's authored truth: sptpd=116 confirmed-correct; parkir=82 pending) — commit it once parkir is resolved.
 
 ### What landed this session (2026-06-04 PM) — legal-validity layer (derivation phase)
 
