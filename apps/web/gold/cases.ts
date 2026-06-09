@@ -51,14 +51,14 @@ export const goldCases: GoldCase[] = [
   {
     id: 'sptpd-sanksi',
     query: 'Apa sanksi jika tidak melaporkan SPTPD?',
-    expected: { work: TODO, pasal: TODO, validity_state: TODO },
-    must_not_contain: [TODO],
-    note: 'SPTPD sanction must come from the LIVE consolidated tax law Perda 1/2024 — NOT repealed 2/2021 Pasal 33. TODO(viddie): read Perda 1/2024, fill the exact live Pasal (state="live"); add must_not_contain entries if a specific repealed figure must never surface.',
+    expected: { work: '1/2024', pasal: '116', validity_state: 'live' }, // CONFIRMED 2026-06-08 (verified against source scan)
+    must_not_contain: ['6 (enam) bulan'], // dead 2/2021 Pasal 33 criminal term; live Pasal 116 uses "1 tahun"/"2 tahun". Use [] if you prefer no guard.
+    note: 'SPTPD sanction must come from LIVE Perda 1/2024 Pasal 116 (ketentuan pidana for deliberately failing the SPTPD obligation) — NOT repealed 2/2021 Pasal 33. SOURCE DEFECT: Pasal 116(2) cross-references "Pasal 106 ayat (5)", which does not exist (Pasal 106 is Peninjauan Tarif Retribusi, 3 ayat); the intended reference is Pasal 109 ayat (5). System must surface this as-written, never auto-correct.',
   },
   {
     id: 'parkir-tarif',
     query: 'Bagaimana retribusi parkir dihitung?',
-    expected: { work: TODO, pasal: TODO, validity_state: TODO },
+    expected: { work: '1/2024', pasal: '82', validity_state: 'live' }, // CONFIRMED 2026-06-08
     // CONFIRMED + TESTED against real corpus strings (see ./README.md "Regex validation").
     // Perda 4/2020 Pasal 8 renders tariffs BARE as "2000/parkir" | "4000/parkir" | "8000/parkir"
     // (no "Rp", no thousands dot). p1 catches that bare form; p2 catches reformatted
@@ -68,7 +68,7 @@ export const goldCases: GoldCase[] = [
       're:(?<![\\d])[248]000\\s*/\\s*parkir',
       're:(?<![\\d])[248]\\.000(?!\\s?[.\\d])',
     ],
-    note: 'Live answer must come from Perda 1/2024 (PBJT/retribusi). Must NEVER return Perda 4/2020 flat parking tariffs (2000/4000/8000 per parkir). TODO(viddie): fill expected.work/pasal/validity_state from the live 1/2024 parking provision after reading the Perda.',
+    note: 'Live answer must come from Perda 1/2024 Pasal 82 (Retribusi Jasa Umum — on-street parking measured by vehicle type, location/zone, frequency, duration; actual tariff deferred to Peraturan Bupati). Must NEVER return Perda 4/2020 flat parking tariffs (2000/4000/8000 per parkir).',
   },
   {
     id: 'narkotika-hotel',
