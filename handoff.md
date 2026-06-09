@@ -1,6 +1,6 @@
 # Vector Pasal — Session Handoff
 
-*Last session: 2026-06-08 (gold-set harness + ingest DoD + dev-route fix). Prior: 2026-06-04 (legal-validity layer + chat behavior fixes); 2026-05-25 (ingestion+cleanup AM, redesign PM).*
+*Last session: 2026-06-09 (parkir gap investigation + corpus Lampiran retrieval bug). Prior: 2026-06-08 (gold-set harness + ingest DoD + dev-route fix); 2026-06-04 (legal-validity layer + chat behavior fixes); 2026-05-25 (ingestion+cleanup AM, redesign PM).*
 
 ## Project goals
 
@@ -9,6 +9,28 @@ AI legal-assistant RAG for **Satpol PP Kabupaten Bolaang Mongondow**. Indonesian
 This repo is a Bolmong-narrowed **fork of [pasal.id](https://pasal.id)**. ~40% of the codebase is leftover scaffolding from the original general-purpose Indonesian legal database. Active vs. leftover map lives in [CLAUDE.md](CLAUDE.md).
 
 ## Current state
+
+### What happened this session (2026-06-09) — parkir investigation + corpus Lampiran bug
+
+- **parkir-tarif gold gap diagnosed.** Pasal 82 ("Tingkat penggunaan jasa atas pelayanan Jasa Umum" — the basis for *how* parking retribusi is calculated; parkir is a Jasa Umum object per Pasal 76) is the **correct** live answer, but it's **keyword-invisible** (its text has no "parkir"/"tarif"), so neither FTS nor (confirmed end-to-end) vector surfaces it — the pipeline cites 76/75/79 instead. The `knownGap` representation (keep `expected: Pasal 82`, render as a visible **skip** that auto-flips red if 82 ever surfaces) was designed + approved but **NOT YET implemented** (paused to investigate). [cases.ts](apps/web/gold/cases.ts) still has `parkir-tarif` as a hard red.
+- **Transient Gemini 503 ("high demand")** dogged all live testing: refinement/embedding calls 503 → the route's outer catch returns `{"error":"Terjadi kesalahan pada server."}` (500). Not a code bug — retry. (The gold runner already skips transient upstream failures.)
+- **MAJOR bug found (below).**
+
+### RETRIEVAL BUG (corpus-wide, found 2026-06-09): Lampiran ingested as one blob, mistyped
+
+Lampiran sections ingest as a single giant node, mistyped. **Confirmed:** Perda 1/2024 **node id 498**, `node_type = penjelasan_pasal` (attached to Pasal 123's penjelasan), **182,170 chars** — the ENTIRE Lampiran (Lampiran I/II/III fused; ~13,932 table cells: parking, pasar, health tariffs) in one node = one embedding → **unrankable** for any specific tariff query. This is why "berapa tarif parkir / pasar / etc." returns "tidak ditemukan" even though the data IS ingested. Root cause is in the **ingestion/chunking pipeline** (LAMPIRAN not split per-table; mistyped as `penjelasan_pasal`) → affects **every Perda with a substantial appendix**, not just 1/2024. (Verified 2026-06-09: node 498 is the only node corpus-wide over 12k chars, so 1/2024 is the only currently-ingested work that manifests it — but the flaw is general.)
+
+**Until fixed, all Lampiran-based tariff answers are unreliable.**
+
+**FIX (next session, fresh):**
+1. Split Lampiran into **per-table nodes** with a correct `node_type` (a `lampiran` / `aturan` content type, not `penjelasan_pasal`); fix in the ingestion/chunking pipeline.
+2. Re-ingest + **re-embed** affected Perda (1/2024 first), then re-verify "tarif parkir / pasar / kesehatan" queries surface the right table.
+3. **Revisit `must_not_contain` (now known unsafe):** live 1/2024 Lampiran tariffs share the same number patterns as dead 4/2020, so a digit-string guard can block a *legitimate* live answer. Verified nuance: the exact `2000/parkir` form is NOT in node 498 (regex p1 safe), but dotted forms (`[248].000`, p2) WOULD match live Lampiran health/other tariffs. **The guard must key on the cited source's `validity.state` (is it a repealed work?), not on the number string.** Update the parkir gold case accordingly when the gold/validity work resumes.
+
+### Still-paused work (for next session)
+- `parkir-tarif` → `knownGap` + visible-skip change ([cases.ts](apps/web/gold/cases.ts) + [gold.test.ts](apps/web/gold/gold.test.ts)): designed, approved, **not implemented**.
+- Validity-state **UI treatments** (consume `source.validity`): designed (ValidityBadge / SourceCard / GatedAnswer / InfoNotice + one `--vp-warning` token + `/dev/validity-states` preview), **not started**.
+Both now intersect the Lampiran fix + the validity-keyed `must_not_contain` correction above.
 
 ### What landed this session (2026-06-08) — gold-set regression harness + ingest DoD + dev-route fix
 
