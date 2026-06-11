@@ -71,6 +71,112 @@ def _normalize_markdown_for_parser(text: str) -> str:
     return text
 
 
+# ── Lampiran (tariff appendix) splitting ─────────────────────────────────────
+# Bolmong tariff appendices (Lampiran I/II/III) sit AFTER the penjelasan's
+# "II. PASAL DEMI PASAL" section. parse_penjelasan()'s pasal-demi-pasal splitter
+# runs to EOF, so the LAST penjelasan pasal swallows the entire appendix into one
+# giant `penjelasan_pasal` node (Perda 1/2024: node 498, 182k chars) -> one
+# embedding -> unrankable. We peel the appendix off the RAW markdown (before
+# heading prefixes are stripped) and turn every markdown heading into its own
+# `lampiran_tarif` node so each tariff table is independently retrievable.
+
+_MD_HEADING_LINE_RE = re.compile(r'^[ \t]*(#{1,6})[ \t]+(.+?)[ \t]*$', re.MULTILINE)
+_LAMPIRAN_HEADING_RE = re.compile(r'^[ \t]*#{1,6}[ \t]+LAMPIRAN\b', re.MULTILINE | re.IGNORECASE)
+_LAMPIRAN_TITLE_RE = re.compile(r'^LAMPIRAN[ \t]+([IVXLCDM]+|\d+)\b', re.IGNORECASE)
+# Per-Lampiran repetition of the Perda's own title — noise, not a section label.
+_LAMPIRAN_SUBTITLE_RE = re.compile(r'^PERATURAN\s+DAERAH\b', re.IGNORECASE)
+
+
+def _split_lampiran_sections(raw_md: str) -> tuple[str, list[dict]]:
+    """Peel a trailing LAMPIRAN appendix out of raw markdown into per-heading nodes.
+
+    Returns ``(text_without_lampiran, lampiran_nodes)``. ``text_without_lampiran``
+    flows into the normal normalize -> parse_structure path (so the penjelasan's
+    last pasal no longer swallows the appendix). ``lampiran_nodes`` is a list of
+    ``lampiran`` container nodes (one per "LAMPIRAN <roman>") whose children are
+    ``lampiran_tarif`` content nodes — one per markdown heading that has body text.
+
+    No LAMPIRAN heading -> returns ``(raw_md, [])`` unchanged. This makes it a safe
+    no-op for transcriptions without an appendix and for the born-digital PyMuPDF
+    path (no ``#`` headings).
+    """
+    m = _LAMPIRAN_HEADING_RE.search(raw_md)
+    if not m:
+        return raw_md, []
+
+    before = raw_md[: m.start()]
+    region = raw_md[m.start():]
+
+    # re.split with one 2-group heading pattern yields:
+    #   [pre, hashes, title, body, hashes, title, body, ...]
+    # 'pre' is empty here because the region starts at a heading.
+    parts = _MD_HEADING_LINE_RE.split(region)
+
+    containers: list[dict] = []
+    current: dict | None = None     # current lampiran container
+    breadcrumb: list[str] = []      # heading-only titles since the last emitted node
+    seq = 0                         # running index within the current container
+
+    for i in range(1, len(parts), 3):
+        title = _MD_BOLD_RE.sub(r'\1', parts[i + 1]).strip()
+        body = parts[i + 2] if i + 2 < len(parts) else ""
+        body_text = _normalize_markdown_for_parser(body).strip()
+
+        lam = _LAMPIRAN_TITLE_RE.match(title)
+        if lam:
+            current = {
+                "type": "lampiran",
+                "number": lam.group(1).upper(),
+                "heading": title,
+                "content": "",
+                "children": [],
+                "sort_order": 0,
+            }
+            containers.append(current)
+            breadcrumb = []
+            seq = 0
+            continue
+
+        if _LAMPIRAN_SUBTITLE_RE.match(title):
+            continue  # drop the repeated Perda-title subtitle line
+
+        if not body_text:
+            breadcrumb.append(title)   # group header — carry into the next body node
+            continue
+
+        full_title = " — ".join([*breadcrumb, title]) if breadcrumb else title
+        breadcrumb = []
+        seq += 1
+        roman = current["number"] if current else "0"
+        node = {
+            "type": "lampiran_tarif",
+            "number": f"{roman}.{seq}",
+            "heading": full_title,
+            # Retain the heading in content so topic words ("PARKIR", "KESEHATAN")
+            # reach FTS + the embedding (the embed contextualizer uses content,
+            # not the heading field).
+            "content": f"{full_title}\n{body_text}",
+            "children": [],
+            "sort_order": 0,
+        }
+        if current is not None:
+            current["children"].append(node)
+        else:
+            containers.append(node)  # defensive: a section before any LAMPIRAN heading
+
+    return before, containers
+
+
+def _count_lampiran_tarif(nodes: list[dict]) -> int:
+    """Count lampiran_tarif nodes in a (possibly nested) node list."""
+    total = 0
+    for n in nodes:
+        if n.get("type") == "lampiran_tarif":
+            total += 1
+        total += _count_lampiran_tarif(n.get("children", []))
+    return total
+
+
 def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
     """Extract text from PDF, correct OCR errors, parse structure.
 
@@ -91,11 +197,20 @@ def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
 
     text = None
     stats = {}
+    lampiran_nodes: list[dict] = []
 
     if transcription_path.exists():
         print(f"   [Found Transcription] Loading {transcription_path.name}")
-        text = transcription_path.read_text(encoding="utf-8")
-        text = _normalize_markdown_for_parser(text)
+        raw_md = transcription_path.read_text(encoding="utf-8")
+        # Peel the tariff appendix off the RAW markdown first (before heading
+        # prefixes are stripped) so each Lampiran table becomes its own node
+        # instead of being swallowed into the last penjelasan pasal.
+        body_md, lampiran_nodes = _split_lampiran_sections(raw_md)
+        if lampiran_nodes:
+            n_sections = _count_lampiran_tarif(lampiran_nodes)
+            print(f"   [Lampiran] Split appendix into {len(lampiran_nodes)} container(s), "
+                  f"{n_sections} tariff section node(s)")
+        text = _normalize_markdown_for_parser(body_md)
         stats = {"page_count": "?", "char_count": len(text), "source": "manual_transcription"}
     else:
         text, stats = extract_text_pymupdf(pdf_path)
@@ -106,6 +221,9 @@ def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
         text = correct_ocr_errors(text)
 
     nodes = parse_structure(text)
+    if lampiran_nodes:
+        # Append after the penjelasan so _flatten_tree's DFS sort_order places them last.
+        nodes.extend(lampiran_nodes)
     pasal_count = count_pasals(nodes)
     print(f"   Parsed: {len(nodes)} top-level nodes, {pasal_count} pasals")
 
@@ -247,7 +365,7 @@ def load_nodes_recursive(
             if result.data:
                 inserted_id = result.data[0]["id"]
 
-                if node_type in ("pasal", "preamble", "content", "aturan", "penjelasan_umum", "penjelasan_pasal"):
+                if node_type in ("pasal", "preamble", "content", "aturan", "penjelasan_umum", "penjelasan_pasal", "lampiran_tarif"):
                     pasal_nodes.append({
                         "node_id": inserted_id,
                         "number": number,
@@ -274,7 +392,7 @@ def load_nodes_recursive(
     return pasal_nodes
 
 
-_CONTENT_NODE_TYPES = ("pasal", "preamble", "content", "aturan", "penjelasan_umum", "penjelasan_pasal")
+_CONTENT_NODE_TYPES = ("pasal", "preamble", "content", "aturan", "penjelasan_umum", "penjelasan_pasal", "lampiran_tarif")
 
 
 def _flatten_tree(nodes: list[dict]) -> list[dict]:
