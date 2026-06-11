@@ -72,13 +72,10 @@ def inspect(md_path: Path, verbose: bool) -> bool:
         print(f"  LAMPIRAN {c['number']}  ({len(c['children'])} sections)  \"{c['heading'][:60]}\"")
         for n in c["children"]:
             clen = len(n["content"])
-            flag = "  <<< OVERSIZED (headingless OCR table — embed-truncation, deferred)" \
-                if clen > MAX_TARIF_CHARS else ""
+            flag = "  <<< OVERSIZED" if clen > MAX_TARIF_CHARS else ""
             if clen > MAX_TARIF_CHARS:
                 oversized.append((n["number"], clen))
-                # NOT a failure: these are headingless OCR table blobs (lab/prasarana)
-                # whose cell-cleaning is explicitly deferred. Splitting them further
-                # would mean cutting inside table cells. Surfaced as a warning only.
+                ok = False  # hard fail: every node must fit the cap after sub-splitting
             line = f"     [{n['number']:>5}] {clen:>7,}c  {n['heading'][:62]}{flag}"
             print(line)
             if verbose:
@@ -97,8 +94,8 @@ def inspect(md_path: Path, verbose: bool) -> bool:
         print(f"  [{'PASS' if present else 'FAIL'}] topic node present: {topic}")
 
     if oversized:
-        print(f"  [WARN] {len(oversized)} headingless OCR table blob(s) exceed {MAX_TARIF_CHARS:,} "
-              f"chars (embed-truncation; cell split deferred): "
+        print(f"  [FAIL] {len(oversized)} node(s) exceed {MAX_TARIF_CHARS:,} chars "
+              f"(sub-split could not safely reduce — decide manually): "
               f"{', '.join(f'{num}={c:,}' for num, c in oversized)}")
     else:
         print(f"  [PASS] no tariff node exceeds {MAX_TARIF_CHARS:,} chars")

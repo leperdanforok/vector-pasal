@@ -86,6 +86,102 @@ _LAMPIRAN_TITLE_RE = re.compile(r'^LAMPIRAN[ \t]+([IVXLCDM]+|\d+)\b', re.IGNOREC
 # Per-Lampiran repetition of the Perda's own title — noise, not a section label.
 _LAMPIRAN_SUBTITLE_RE = re.compile(r'^PERATURAN\s+DAERAH\b', re.IGNORECASE)
 
+# Max chars for one lampiran_tarif node. Oversized nodes (a heading whose body is
+# one long table with no markdown sub-headings) get sub-split at bold in-table
+# label rows so each node stays rankable (gemini-embedding-001 ≈ 2048 tokens).
+_LAMPIRAN_NODE_CAP = 12_000
+
+_TABLE_ROW_RE = re.compile(r'^[ \t]*\|.*\|[ \t]*$')
+_TABLE_SEP_RE = re.compile(r'^[ \t]*\|[ \t]*:?-{2,}.*\|[ \t]*$')
+# Currency value (24.000 / 204.000,00 / ,00) — present in data rows, absent in label rows.
+_CURRENCY_RE = re.compile(r'\d\.\d{3}|\d,\d{2}')
+
+
+def _is_boundary_row(line: str) -> bool:
+    """True for a bold in-table *label* row: contains ** and carries no tariff value.
+
+    Distinguishes section-label rows (`| | **Aspal Keras** | | | |`) from bold *data*
+    rows that happen to carry a price on the same line (those have a currency value).
+    """
+    return '**' in line and not _CURRENCY_RE.search(line)
+
+
+def _subsplit_table_section(raw_body: str, cap: int) -> list[tuple[str, str]] | None:
+    """Pack an oversized tariff-table body into <=cap chunks, cutting only at label rows.
+
+    Returns ``[(sub_label, sub_raw_body), ...]`` (each chunk re-attaches its table's
+    column header + separator so no row is orphaned), or ``None`` when it cannot split
+    safely: no table structure, no usable boundary, a single atomic group already over
+    cap, or nothing gained. The caller then keeps the original node and surfaces it.
+    """
+    lines = raw_body.split('\n')
+
+    # ── Identify table blocks: header row immediately followed by a :--- separator ──
+    blocks: list[dict] = []
+    i, n = 0, len(lines)
+    while i < n - 1:
+        if _TABLE_ROW_RE.match(lines[i]) and _TABLE_SEP_RE.match(lines[i + 1]):
+            j = i + 2
+            while j < n and lines[j].strip() and not (
+                _TABLE_ROW_RE.match(lines[j]) and j + 1 < n and _TABLE_SEP_RE.match(lines[j + 1])
+            ):
+                j += 1
+            blocks.append({"header": lines[i], "sep": lines[i + 1], "rows": lines[i + 2:j]})
+            i = j
+        else:
+            i += 1
+
+    if not blocks:
+        return None  # no table structure -> can't cut without slicing prose; surface it
+
+    # ── Atomic groups: a label row + the data rows until the next label/block end ──
+    groups: list[dict] = []  # {header, sep, label, rows}
+    for blk in blocks:
+        cur = {"header": blk["header"], "sep": blk["sep"], "label": "", "rows": []}
+        for row in blk["rows"]:
+            if _is_boundary_row(row):
+                if cur["rows"] or cur["label"]:
+                    groups.append(cur)
+                label = _MD_BOLD_RE.sub(r'\1', row)
+                label = ' '.join(c.strip() for c in label.split('|') if c.strip())
+                cur = {"header": blk["header"], "sep": blk["sep"], "label": label, "rows": [row]}
+            else:
+                cur["rows"].append(row)
+        if cur["rows"] or cur["label"]:
+            groups.append(cur)
+
+    def _chunk_len(header: str, sep: str, rows: list[str]) -> int:
+        return len(_normalize_markdown_for_parser('\n'.join([header, sep, *rows])).strip())
+
+    # A single atomic group over cap can't be split without slicing one sub-table -> refuse.
+    if any(_chunk_len(g["header"], g["sep"], g["rows"]) > cap for g in groups):
+        return None
+
+    # ── Greedy-pack consecutive same-block groups into <=cap chunks ────────────
+    chunks: list[tuple[str, str]] = []
+    cur_header = cur_sep = cur_label = ""
+    cur_rows: list[str] = []
+
+    def _flush() -> None:
+        if cur_rows:
+            chunks.append((cur_label, '\n'.join([cur_header, cur_sep, *cur_rows])))
+
+    for g in groups:
+        if not cur_rows:
+            cur_header, cur_sep, cur_label = g["header"], g["sep"], g["label"]
+            cur_rows = list(g["rows"])
+            continue
+        same_block = g["header"] == cur_header and g["sep"] == cur_sep
+        if same_block and _chunk_len(cur_header, cur_sep, cur_rows + g["rows"]) <= cap:
+            cur_rows.extend(g["rows"])
+        else:
+            _flush()
+            cur_header, cur_sep, cur_label = g["header"], g["sep"], g["label"]
+            cur_rows = list(g["rows"])
+    _flush()
+
+    return chunks if len(chunks) > 1 else None
+
 
 def _split_lampiran_sections(raw_md: str) -> tuple[str, list[dict]]:
     """Peel a trailing LAMPIRAN appendix out of raw markdown into per-heading nodes.
@@ -148,21 +244,41 @@ def _split_lampiran_sections(raw_md: str) -> tuple[str, list[dict]]:
         breadcrumb = []
         seq += 1
         roman = current["number"] if current else "0"
-        node = {
-            "type": "lampiran_tarif",
-            "number": f"{roman}.{seq}",
-            "heading": full_title,
-            # Retain the heading in content so topic words ("PARKIR", "KESEHATAN")
-            # reach FTS + the embedding (the embed contextualizer uses content,
-            # not the heading field).
-            "content": f"{full_title}\n{body_text}",
-            "children": [],
-            "sort_order": 0,
-        }
-        if current is not None:
-            current["children"].append(node)
+        base_number = f"{roman}.{seq}"
+
+        # Retain the heading in content so topic words ("PARKIR", "KESEHATAN") reach
+        # FTS + the embedding (the embed contextualizer uses content, not the heading).
+        content = f"{full_title}\n{body_text}"
+        sink = current["children"] if current is not None else containers
+
+        # Oversized section (a heading whose body is one long table) -> sub-split at
+        # in-table bold label rows so every node stays within the embedding window.
+        chunks = None
+        if len(content) > _LAMPIRAN_NODE_CAP:
+            # Leave headroom for the (longer) per-chunk sub-title prefix.
+            chunks = _subsplit_table_section(body, cap=_LAMPIRAN_NODE_CAP - 300)
+
+        if chunks:
+            for k, (sub_label, sub_raw) in enumerate(chunks, start=1):
+                sub_title = f"{full_title} — {sub_label}" if sub_label else full_title
+                sub_body = _normalize_markdown_for_parser(sub_raw).strip()
+                sink.append({
+                    "type": "lampiran_tarif",
+                    "number": f"{base_number}.{k}",
+                    "heading": sub_title,
+                    "content": f"{sub_title}\n{sub_body}",
+                    "children": [],
+                    "sort_order": 0,
+                })
         else:
-            containers.append(node)  # defensive: a section before any LAMPIRAN heading
+            sink.append({
+                "type": "lampiran_tarif",
+                "number": base_number,
+                "heading": full_title,
+                "content": content,
+                "children": [],
+                "sort_order": 0,
+            })
 
     return before, containers
 
