@@ -32,7 +32,7 @@ from loader.load_to_supabase import _split_lampiran_sections, _count_lampiran_ta
 TRANSCRIPTIONS = Path(__file__).parent.parent.parent / "data" / "transcriptions"
 PERDA_1_2024 = "peraturan-daerah-nomor-1-tahun-2024-tentang-pajak-dan-retribusi-daerah.md"
 
-MAX_TARIF_CHARS = 12_000
+MAX_TARIF_CHARS = 8_000  # proxy for gemini-embedding-001's ~2048-token window
 EXPECTED_TOPICS = ("PARKIR", "PASAR", "KEBERSIHAN", "KESEHATAN")
 
 

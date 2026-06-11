@@ -88,8 +88,10 @@ _LAMPIRAN_SUBTITLE_RE = re.compile(r'^PERATURAN\s+DAERAH\b', re.IGNORECASE)
 
 # Max chars for one lampiran_tarif node. Oversized nodes (a heading whose body is
 # one long table with no markdown sub-headings) get sub-split at bold in-table
-# label rows so each node stays rankable (gemini-embedding-001 ≈ 2048 tokens).
-_LAMPIRAN_NODE_CAP = 12_000
+# label rows so each node stays rankable. 8k chars is a proxy for the ~2048-token
+# embedding window of gemini-embedding-001 (~4 chars/token); above it the tail of
+# the node is silently dropped at embed time.
+_LAMPIRAN_NODE_CAP = 8_000
 
 _TABLE_ROW_RE = re.compile(r'^[ \t]*\|.*\|[ \t]*$')
 _TABLE_SEP_RE = re.compile(r'^[ \t]*\|[ \t]*:?-{2,}.*\|[ \t]*$')
