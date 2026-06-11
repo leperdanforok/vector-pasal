@@ -1,6 +1,6 @@
 # Vector Pasal — Session Handoff
 
-*Last session: 2026-06-09 (parkir gap investigation + corpus Lampiran retrieval bug). Prior: 2026-06-08 (gold-set harness + ingest DoD + dev-route fix); 2026-06-04 (legal-validity layer + chat behavior fixes); 2026-05-25 (ingestion+cleanup AM, redesign PM).*
+*Last session: 2026-06-11 (Lampiran chunking fix — chunker rebuild, parsing-level only). Prior: 2026-06-09 (parkir gap investigation + corpus Lampiran retrieval bug); 2026-06-08 (gold-set harness + ingest DoD + dev-route fix); 2026-06-04 (legal-validity layer + chat behavior fixes); 2026-05-25 (ingestion+cleanup AM, redesign PM).*
 
 ## Project goals
 
@@ -10,6 +10,29 @@ This repo is a Bolmong-narrowed **fork of [pasal.id](https://pasal.id)**. ~40% o
 
 ## Current state
 
+### What happened this session (2026-06-11) — Lampiran chunking fix (chunker rebuild, NO live DB writes)
+
+Fixed the corpus-wide Lampiran-blob bug **at the ingestion/chunking level**. All parsing-level work, **no re-ingest, no Supabase writes** — the live DB (node 498) is untouched until Day 2. Three commits on **`feat/legal-validity-layer`**:
+
+- **`478927b`** — **`_split_lampiran_sections()`** in [scripts/loader/load_to_supabase.py](scripts/loader/load_to_supabase.py). Peels the tariff appendix off the **raw markdown** (before `_normalize_markdown_for_parser` strips `#`/`**`) and turns every markdown heading into its own **`lampiran_tarif`** node under a `lampiran` container, retaining the heading inside `content_text` so topic words reach FTS + the embedding. Wired into `process_pdf`'s transcription branch (no-op on the PyMuPDF path / any transcription without a `### LAMPIRAN` heading). Registered `lampiran_tarif` in both content-type tuples. **Root cause** (now in the commit msg): the penjelasan "II. PASAL DEMI PASAL" splitter (parse_structure.py:576) runs to EOF, so the **last** penjelasan pasal (Pasal 123) swallowed all of Lampiran I/II/III → node 498, `penjelasan_pasal`, 182k chars.
+- **`4a0f4ab`** — **`_subsplit_table_section()`**: a section whose body is one long table with no markdown sub-headings (II.12 PENGUJIAN LABORATORIUM) gets sub-split at **bold in-table label rows** (rows with `**` and no currency value), greedy-packing whole label-groups into ≤cap chunks and **re-attaching each table block's column header** so no row is orphaned. Refuses to cut (`None` → node kept, inspection FAILs for manual decision) when there's no structural boundary or a single group already exceeds the cap — never a blind mid-table slice. Runs on raw markdown (where `**` survives).
+- **`311fde8`** — tightened the node cap **12k → 8k chars** (`_LAMPIRAN_NODE_CAP` + inspection `MAX_TARIF_CHARS`) as a proxy for gemini-embedding-001's ~2048-token window.
+
+**Verified (parsing-level, [scripts/loader/inspect_lampiran_split.py](scripts/loader/inspect_lampiran_split.py)):** 1/2024 → 3 containers, **93 tariff nodes, every node ≤ 8,000**, parkir/pasar/kebersihan/kesehatan each distinct, body still parses **125 pasals**, no appendix leak (body tail ends at Pasal 123); clean no-op on the other 4 transcriptions. **No node hit refuse-to-cut** — everything reduced at semantic boundaries. Sections sub-split at 8k: I.38→2, II.1→6, II.12→5, III.1→5.
+
+**Migration 065** ([packages/supabase/migrations/065_lampiran_tarif_searchable.sql](packages/supabase/migrations/065_lampiran_tarif_searchable.sql)) authored, **NOT applied** — adds `lampiran_tarif` to `search_legal_chunks`'s node-type filter. `match_legal_chunks` (vector) needs no change (filters only on `embedding IS NOT NULL`).
+
+#### Day 2 — re-ingest + live verify (the chunker change does nothing until this runs)
+1. **Apply migration 065** (Supabase SQL editor or MCP). Harmless no-op on current data (no node has the type yet).
+2. **Re-ingest 1/2024 only:** `python scripts/load_perda_bolmong.py` (the loader's `cleanup_work_data` wipes 1/2024's nodes incl. **498**, re-parses with the new splitter, re-embeds). Watch for `[Lampiran] Split appendix into 3 container(s), 93 tariff section node(s)`. Use plain `python` (no repo venv).
+3. **Live-verify** "berapa tarif parkir / pasar / kesehatan / gigi / pengujian laboratorium" now surface the right `lampiran_tarif` node instead of "tidak ditemukan".
+4. **Citation-label fix (route, easy to miss):** a `lampiran_tarif` node's `number` is like `"I.54"` / `"II.12.1"`, so the chat route's `[Perda No N/YYYY, Pasal X]` header renders "Pasal I.54". Add node_type-aware labeling ("Lampiran" vs "Pasal") in [route.ts](apps/web/src/app/api/chat/route.ts) with the re-ingest.
+5. **Then** the paused gold/UI work + validity-keyed `must_not_contain` rework can resume (parkir tariffs are now retrievable; the guard must key on `validity.state`, not digit strings — see 2026-06-09 note below).
+
+**Rollback:** today is code + an unapplied migration → `git revert` restores it; node 498 untouched; cached transcriptions reproduce the old structure. Nothing irreversible until step 2 runs (itself re-runnable from cache).
+
+**Loose ends (cosmetic, flagged not fixed):** II.1.x sub-nodes all share the parent title "STRUKTUR…JASA USAHA" (their sub-tables carry no bold label → breadcrumb falls back to parent); II.12.2's title uses a mid-list bold label. Two single-section nodes sit just under the 8k cap (II.11=7,793, I.46=7,964) — kept whole; they'd be the next candidates if the cap dropped, and *could* be irreducible single tables worth surfacing.
+
 ### What happened this session (2026-06-09) — parkir investigation + corpus Lampiran bug
 
 - **parkir-tarif gold gap diagnosed.** Pasal 82 ("Tingkat penggunaan jasa atas pelayanan Jasa Umum" — the basis for *how* parking retribusi is calculated; parkir is a Jasa Umum object per Pasal 76) is the **correct** live answer, but it's **keyword-invisible** (its text has no "parkir"/"tarif"), so neither FTS nor (confirmed end-to-end) vector surfaces it — the pipeline cites 76/75/79 instead. The `knownGap` representation (keep `expected: Pasal 82`, render as a visible **skip** that auto-flips red if 82 ever surfaces) was designed + approved but **NOT YET implemented** (paused to investigate). [cases.ts](apps/web/gold/cases.ts) still has `parkir-tarif` as a hard red.
@@ -17,6 +40,8 @@ This repo is a Bolmong-narrowed **fork of [pasal.id](https://pasal.id)**. ~40% o
 - **MAJOR bug found (below).**
 
 ### RETRIEVAL BUG (corpus-wide, found 2026-06-09): Lampiran ingested as one blob, mistyped
+
+> **STATUS 2026-06-11: chunker FIXED (commits `478927b`/`4a0f4ab`/`311fde8`), live DB NOT yet re-ingested.** The splitter below now produces 93 per-table `lampiran_tarif` nodes (≤8k each) instead of node 498's 182k blob — verified at the parsing level. Node 498 still exists in the DB until the Day-2 re-ingest (see the 2026-06-11 section above). **Until that re-ingest runs, live tariff answers are still unreliable.**
 
 Lampiran sections ingest as a single giant node, mistyped. **Confirmed:** Perda 1/2024 **node id 498**, `node_type = penjelasan_pasal` (attached to Pasal 123's penjelasan), **182,170 chars** — the ENTIRE Lampiran (Lampiran I/II/III fused; ~13,932 table cells: parking, pasar, health tariffs) in one node = one embedding → **unrankable** for any specific tariff query. This is why "berapa tarif parkir / pasar / etc." returns "tidak ditemukan" even though the data IS ingested. Root cause is in the **ingestion/chunking pipeline** (LAMPIRAN not split per-table; mistyped as `penjelasan_pasal`) → affects **every Perda with a substantial appendix**, not just 1/2024. (Verified 2026-06-09: node 498 is the only node corpus-wide over 12k chars, so 1/2024 is the only currently-ingested work that manifests it — but the flaw is general.)
 
