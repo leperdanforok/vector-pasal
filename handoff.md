@@ -1,6 +1,6 @@
 # Vector Pasal — Session Handoff
 
-*Last session: 2026-06-12 (Lampiran Day-2 — re-ingest live + citation labels + validity-keyed gold guard; **"berapa tarif parkir" now answers live with real numbers**). Prior: 2026-06-11 (Lampiran chunking fix — chunker rebuild, parsing-level only); 2026-06-09 (parkir gap investigation + corpus Lampiran retrieval bug); 2026-06-08 (gold-set harness + ingest DoD + dev-route fix); 2026-06-04 (legal-validity layer + chat behavior fixes); 2026-05-25 (ingestion+cleanup AM, redesign PM).*
+*Last session: 2026-06-13 (validity-state UI treatments — consume the source.validity contract; 5 treatments, dev preview, dead-content hidden behind acknowledgment). Prior: 2026-06-12 (Lampiran Day-2 — re-ingest live + citation labels + validity-keyed gold guard; **"berapa tarif parkir" now answers live with real numbers**); 2026-06-11 (Lampiran chunking fix — chunker rebuild, parsing-level only); 2026-06-09 (parkir gap investigation + corpus Lampiran retrieval bug); 2026-06-08 (gold-set harness + ingest DoD + dev-route fix); 2026-06-04 (legal-validity layer + chat behavior fixes); 2026-05-25 (ingestion+cleanup AM, redesign PM).*
 
 ## Project goals
 
@@ -9,6 +9,36 @@ AI legal-assistant RAG for **Satpol PP Kabupaten Bolaang Mongondow**. Indonesian
 This repo is a Bolmong-narrowed **fork of [pasal.id](https://pasal.id)**. ~40% of the codebase is leftover scaffolding from the original general-purpose Indonesian legal database. Active vs. leftover map lives in [CLAUDE.md](CLAUDE.md).
 
 ## Current state
+
+### What happened this session (2026-06-13) — validity-state UI treatments (frontend consumption only)
+
+Built the UI layer that makes legal validity **visible** and dead law **un-mistakable for live law**, purely consuming the `source.validity` + `role` + `node_type` contract Day-2 put on the wire. **No changes to validity.ts, the route, retrieval, or the gold harness.** All **uncommitted** on `feat/legal-validity-layer` (working tree).
+
+**Contract reconciliation done first (code wins):** the frontend `Source` type was dropping `validity`/`role`/`node_type` entirely — they arrived over NDJSON and were discarded. A per-source `validity.state` is only ever `live` / `repealed_with_successor` / `repealed_no_successor`; `out_of_coverage` and `successor_unretrieved` have **no source** (response-level, no card). `repealed_with_successor` only ever appears as `role:'demoted'` (never hero). Captured in [validity-ui.ts](apps/web/src/lib/validity-ui.ts) header comment.
+
+**New files:**
+- [apps/web/src/lib/validity-ui.ts](apps/web/src/lib/validity-ui.ts) — pure presentational mapping `validityPresentation(state) → {label, icon, tone}` + extended `Source` type + node_type-aware `pasalLabel`/`perdaRef` (mirrors the route's Lampiran-vs-Pasal rule).
+- [apps/web/src/components/Icon.tsx](apps/web/src/components/Icon.tsx) — Icon set **extracted** from page.tsx so the chat and the dev preview share the same components (added alert-triangle/eye/eye-off/lock/building).
+- `apps/web/src/components/validity/` — `ValidityBits` (ValidityBadge, **DeadContentDisclosure**, AcknowledgeGate), `SourceCard` (VPSourceCard, all states), `ValidityNotice`, `DocumentModal`.
+- [apps/web/src/app/[locale]/dev/validity-states/page.tsx](apps/web/src/app/[locale]/dev/validity-states/page.tsx) — preview of all 5 states; **LIVE-VERIFIED** fixture = the captured parkir frame (content read read-only from `document_nodes` ids 2287/2311/990/1013/961, no re-POST), **MOCK-TESTED** for the rest. Light/dark toggle. Reachable at **`/dev/validity-states`** (under `[locale]`, no middleware change).
+
+**Changed:** [page.tsx](apps/web/src/app/[locale]/page.tsx) now imports the extracted Icon/VPSourceCard/DocumentModal/Source (inline versions removed); [globals.css](apps/web/src/app/globals.css) gains **one** `--vp-warning` token (light+dark) + `.vp-source-card--demoted/--gated`, `.vp-validity-badge`, `.vp-dead-*`, `.vp-ack-*`, `.vp-validity-notice` classes.
+
+**The five treatments (screenshots confirmed, light + dark):**
+- **live** → green "Berlaku" badge; ref label honours node_type ("Lampiran I.54").
+- **repealed_with_successor (demoted)** → dimmed subordinate footnote, "DICABUT" + "Diganti oleh Perda No 1/2024", **dead body collapsed**, revealed only on a deliberate "Lihat teks lama" click **with a persistent DICABUT watermark**. Makes the off-topic walet-under-parkir demoted refs read as "related repealed regulation," not answer content.
+- **repealed_no_successor** → amber `--vp-warning`, "Saya paham" gate (the only gated state). MOCK.
+- **out_of_coverage** / **successor_unretrieved** → card-less `ValidityNotice` pointing to Bagian Hukum. MOCK (`successor_unretrieved` folded in at user request).
+
+**Safety verified end-to-end:** dead content = 0 in default render (collapsed); live tariffs shown; the **document modal suppresses the `Salin` (copy) button for dead sources** (footer = `["Tutup"]` only) while keeping it for live — officers can't copy dead numbers. Why this matters: live 1/2024 Lampiran I.54 parking rates are the *same numbers* as dead 4/2020 (Rp2.000/4.000/8.000), so the dead/live boundary is the only safe signal — see [[parkir-tariff-validity-not-digits]].
+
+**Verification:** `npx tsc --noEmit` clean; `npm run test` 52/52; `/dev/validity-states` HTTP 200, no error overlay; light + dark both correct; only console error is a pre-existing CSP block of Vercel analytics (unrelated).
+
+**TODO next:**
+1. **Commit + push** the working tree (validity-ui, Icon, components/validity/*, page.tsx, globals.css, dev preview, handoff) — currently uncommitted. Then it can ship with the Day-2 commit `af4c39a` (also unpushed-as-PR).
+2. The two notice states are **wired in the dev preview only** — the live route streams `successor_unretrieved`/`out_of_coverage` as text with no machine-readable frame, so wiring them into live chat needs a route signal (a `{type:'state'}` NDJSON frame) — a deliberate route change, out of this session's scope.
+3. **Pre-existing wart, not fixed (by design):** the demotion filter keys on successor work, not topic, so walet 2/2021 refs still surface under a parkir answer. The demote treatment now makes that read acceptably ("related repealed regulation"), but topic-scoping the filter is the real fix when someone touches the route.
+4. No PR open yet for `feat/legal-validity-layer`.
 
 ### What happened this session (2026-06-12) — Lampiran Day-2: re-ingest LIVE + citation labels + validity-keyed gold guard
 
