@@ -59,16 +59,17 @@ export const goldCases: GoldCase[] = [
     id: 'parkir-tarif',
     query: 'Bagaimana retribusi parkir dihitung?',
     expected: { work: '1/2024', pasal: '82', validity_state: 'live' }, // CONFIRMED 2026-06-08
-    // CONFIRMED + TESTED against real corpus strings (see ./README.md "Regex validation").
-    // Perda 4/2020 Pasal 8 renders tariffs BARE as "2000/parkir" | "4000/parkir" | "8000/parkir"
-    // (no "Rp", no thousands dot). p1 catches that bare form; p2 catches reformatted
-    // "Rp2.000"/"2.000" of exactly 2/4/8-thousand while EXCLUDING millions (Rp2.000.000,
-    // Rp20.000.000, Rp80.000.000 …) via the negative lookahead.
+    // SAFETY MODEL CHANGED 2026-06-12 (Lampiran re-ingest): the primary dead-tariff guard is now
+    // the corpus-agnostic VALIDITY check in gold.test.ts (no hero source may be a repealed work),
+    // not a number-string regex. We keep ONLY p1 — Perda 4/2020 Pasal 8's bare form
+    // "2000/parkir"|"4000/parkir"|"8000/parkir" (no "Rp", no thousands dot), which is unique to
+    // the dead work. The old p2 ("Rp2.000"/"2.000" dotted form) was DROPPED: after the Lampiran
+    // re-ingest, LIVE 1/2024 tariff tables use those same dotted forms, so p2 would false-block a
+    // legitimate live answer (handoff 2026-06-09/06-11).
     must_not_contain: [
       're:(?<![\\d])[248]000\\s*/\\s*parkir',
-      're:(?<![\\d])[248]\\.000(?!\\s?[.\\d])',
     ],
-    note: 'Live answer must come from Perda 1/2024 Pasal 82 (Retribusi Jasa Umum — on-street parking measured by vehicle type, location/zone, frequency, duration; actual tariff deferred to Peraturan Bupati). Must NEVER return Perda 4/2020 flat parking tariffs (2000/4000/8000 per parkir).',
+    note: 'Live answer must come from Perda 1/2024 Pasal 82 (Retribusi Jasa Umum — on-street parking measured by vehicle type, location/zone, frequency, duration; actual tariff deferred to Peraturan Bupati). Must NEVER return Perda 4/2020 flat parking tariffs (2000/4000/8000 per parkir) — enforced primarily by the validity hero-guard.',
   },
   {
     id: 'narkotika-hotel',
@@ -76,5 +77,19 @@ export const goldCases: GoldCase[] = [
     expected: { work: '6/2025', pasal: '25', validity_state: 'live' }, // CONFIRMED (unchanged)
     must_not_contain: [],
     note: 'Live obligation from Perda 6/2025 Pasal 25 (not repealed; unchanged by the validity work).',
+  },
+  {
+    id: 'parkir-tarif-lampiran',
+    query: 'Berapa tarif parkir?',
+    // NEW 2026-06-12: the Lampiran re-ingest made the actual on-street parking tariff TABLE
+    // retrievable as a live `lampiran_tarif` node (1/2024 Lampiran I.54, "PELAYANAN PARKIR DI
+    // TEPI JALANAN UMUM"). This case targets the NUMBER, distinct from `parkir-tarif` which
+    // targets the calculation method (Pasal 82). The Lampiran node's `pasal` is "I.54" (carried
+    // in source.metadata; node_type === 'lampiran_tarif').
+    expected: { work: '1/2024', pasal: 'I.54', validity_state: 'live' }, // CONFIRMED 2026-06-12 (maintainer read of Lampiran I.54)
+    must_not_contain: [
+      're:(?<![\\d])[248]000\\s*/\\s*parkir', // dead Perda 4/2020 bare flat-tariff form
+    ],
+    note: 'Live on-street parking tariff must come from Perda 1/2024 Lampiran I.54. Must NEVER surface Perda 4/2020 flat tariffs (2000/4000/8000 per parkir) — covered structurally by the validity hero-guard.',
   },
 ];

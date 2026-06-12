@@ -1,6 +1,6 @@
 # Vector Pasal — Session Handoff
 
-*Last session: 2026-06-11 (Lampiran chunking fix — chunker rebuild, parsing-level only). Prior: 2026-06-09 (parkir gap investigation + corpus Lampiran retrieval bug); 2026-06-08 (gold-set harness + ingest DoD + dev-route fix); 2026-06-04 (legal-validity layer + chat behavior fixes); 2026-05-25 (ingestion+cleanup AM, redesign PM).*
+*Last session: 2026-06-12 (Lampiran Day-2 — re-ingest live + citation labels + validity-keyed gold guard; **"berapa tarif parkir" now answers live with real numbers**). Prior: 2026-06-11 (Lampiran chunking fix — chunker rebuild, parsing-level only); 2026-06-09 (parkir gap investigation + corpus Lampiran retrieval bug); 2026-06-08 (gold-set harness + ingest DoD + dev-route fix); 2026-06-04 (legal-validity layer + chat behavior fixes); 2026-05-25 (ingestion+cleanup AM, redesign PM).*
 
 ## Project goals
 
@@ -9,6 +9,36 @@ AI legal-assistant RAG for **Satpol PP Kabupaten Bolaang Mongondow**. Indonesian
 This repo is a Bolmong-narrowed **fork of [pasal.id](https://pasal.id)**. ~40% of the codebase is leftover scaffolding from the original general-purpose Indonesian legal database. Active vs. leftover map lives in [CLAUDE.md](CLAUDE.md).
 
 ## Current state
+
+### What happened this session (2026-06-12) — Lampiran Day-2: re-ingest LIVE + citation labels + validity-keyed gold guard
+
+Executed Day-2 of the 2026-06-11 plan against the live `Pasal-Bolmong` DB (`vjtdzmixoecmfshfydwr`). **The Lampiran-blob bug is now fixed end-to-end: "Berapa tarif parkir?" returns live 1/2024 Lampiran I.54 with real numbers.** All work is **uncommitted** on `feat/legal-validity-layer` (working tree) — not yet committed/pushed.
+
+**Migrations applied (065–068):**
+- **`065`** — adds `lampiran_tarif` to `search_legal_chunks`'s node-type filter (was authored, now applied).
+- **`066` (NEW, unplanned — surfaced during re-ingest)** — `document_nodes_node_type_check` allowed `lampiran` (container) but **not `lampiran_tarif`**, so the first re-ingest had all 93 tariff inserts rejected (23514). 066 widens the CHECK to include `lampiran_tarif`. **Lesson:** a new node_type needs BOTH the search-filter (065) AND the table CHECK constraint — the parsing-level `inspect_lampiran_split.py` can't catch a DB-constraint failure.
+- **`067`** — `node_type` added to `match_legal_chunks` (vector) metadata (trivial CREATE OR REPLACE).
+- **`068`** — `node_type` threaded through `search_legal_chunks` CTEs (`and_m`/`or_m`/`sanctions` → `nt`) into the final metadata jsonb. Supersedes 065's function body. (Plan called these 066/067; renumbered to 067/068 because the constraint fix took 066.)
+
+**Re-ingest (live):** added a crash-safe `--only <substr>` in-memory filter to [load_perda_bolmong.py](scripts/load_perda_bolmong.py) (no PDF move/restore). `python scripts/load_perda_bolmong.py --only 2024` re-used **work_id 3** (frbr_uri match), `cleanup_work_data` wiped node 498, re-parsed with the splitter → **344 nodes (251 body + 93 lampiran_tarif), 225 embedded, 125 pasals, 3 containers**. **Node 498 is gone**; no node corpus-wide >12k; all 93 tariff nodes ≤8k (max 7,964), all embedded.
+
+**Retrieval verified (SQL, post-068 re-check too):** each tariff query surfaces its distinct `lampiran_tarif` node — **parkir → I.54 rank #1**, kesehatan → I.14 #1, lab → II.12.x #1 (pasar I.55 / gigi I.28 land rank 3–4 under pure FTS since "tarif" is ubiquitous; vector + LLM filter handle final relevance). `metadata.node_type` now present on both RPCs.
+
+**Citation labels** ([route.ts](apps/web/src/app/api/chat/route.ts)): context header renders `[Perda No 1/2024, Lampiran I.54]` (vs `Pasal`) when `meta.node_type === 'lampiran_tarif'`; cited-source detection now also captures `Lampiran <roman.dotted>` citations so tariff answers get source cards.
+
+**Validity-keyed gold guard** (the `must_not_contain` rework): sources now carry `role: 'hero' | 'demoted'` (route.ts `toSource`); [gold.test.ts](apps/web/gold/gold.test.ts) adds a corpus-agnostic assertion — **no hero source may be a repealed work** (demoted refs exempt). [cases.ts](apps/web/gold/cases.ts) `parkir-tarif`: **dropped the unsafe p2 dotted-number regex** (live 1/2024 tariffs use the same dotted forms), kept the safe p1 bare-`2000/parkir` (unique to dead 4/2020). Added scaffold case **`parkir-tarif-lampiran`** ("Berapa tarif parkir?") with `expected.* = TODO(viddie)` — fill from the live read below.
+
+**KEY FINDING — why digit-guards were always doomed:** live 1/2024 Lampiran I.54 parking rates are **Rp2.000 / Rp4.000 / Rp8.000** — *identical numbers* to the dead 4/2020 flat tariffs. Only the cited source's `validity.state` can distinguish a correct live answer from a dead one. The live answer is dotted ("Rp2.000") so p1 (bare "2000/parkir") correctly does not fire.
+
+**Live answer captured (`POST /api/chat` "Berapa tarif parkir?"):** cites **1/2024 Lampiran I.54** (Roda 2/3 Rp2.000, Roda 4 Rp4.000, Roda 6+ Rp8.000 /parkir) + **Lampiran II.13** (rekreasi), both `role:hero validity:live`. No 4/2020 leak.
+
+**Verification:** `tsc` clean; `npm run test` 52/52; gold — walet/sptpd/narkotika ✓, **parkir-tarif ✗ (PRE-EXISTING open finding, Pasal 82 — untouched this session, needs the user's legal call)**, parkir-tarif-lampiran ✓ (safety+hero-guard; ground-truth TODO skipped).
+
+**TODO next:**
+1. **Author `parkir-tarif-lampiran` expected.*** by reading 1/2024 Lampiran I.54 (work=1/2024, pasal="I.54", validity_state="live"). Never auto-fill.
+2. **Resolve the pre-existing `parkir-tarif` (Pasal 82) finding** — is 82 the right expectation, or should the query/expectation change? (See 2026-06-08 note.)
+3. **Cosmetic (pre-existing, not a regression):** under the parkir answer, three **walet 2/2021** pasals appear as `demoted` refs — because both walet 2/2021 and parkir 4/2020 were repealed by the *same* successor (1/2024), and the demotion filter keys only on `successorWorkId ∈ heroWorkIds`, not topic. Harmless (correctly labeled repealed, never fed to the LLM) but confusing UX; consider topic-scoping the demotion when the validity UI work resumes.
+4. Commit the working tree (migrations 065–068, loader `--only`, route.ts, gold/*) — currently uncommitted.
 
 ### What happened this session (2026-06-11) — Lampiran chunking fix (chunker rebuild, NO live DB writes)
 

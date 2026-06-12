@@ -79,6 +79,13 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float] | None]:
 def main():
     parser = argparse.ArgumentParser(description="Process Bolmong Regulations")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--only",
+        metavar="SUBSTR",
+        help="Only process PDFs whose filename contains this substring "
+             "(case-insensitive). Scopes a re-ingest to one Perda without "
+             "touching the corpus directory.",
+    )
     args = parser.parse_args()
 
     # 1. Find all PDFs in your folder automatically
@@ -88,6 +95,16 @@ def main():
     if not pdf_files:
         print("No PDFs found! Check your folder path.")
         return
+
+    # In-memory scope filter (never moves/mutates the corpus dir — crash-safe).
+    if args.only:
+        needle = args.only.lower()
+        pdf_files = [p for p in pdf_files if needle in p.name.lower()]
+        print(f"=== --only '{args.only}' matched {len(pdf_files)} PDF(s): "
+              f"{[p.name for p in pdf_files]} ===\n")
+        if not pdf_files:
+            print(f"No PDFs match --only '{args.only}'. Aborting.")
+            return
 
     sb = None if args.dry_run else get_sb()
 

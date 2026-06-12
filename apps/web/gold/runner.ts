@@ -6,8 +6,10 @@
  */
 export type GoldSource = {
   content: string;
-  metadata?: { type?: string; number?: string | number; year?: string | number; pasal?: string | number };
+  metadata?: { type?: string; number?: string | number; year?: string | number; pasal?: string | number; node_type?: string };
   validity?: { state: string; repealedBy?: { number: string; year: number; label: string } };
+  /** Whether this source grounds the answer (`hero`) or is a demoted "older version" reference. */
+  role?: 'hero' | 'demoted';
 };
 
 export type GoldResult = {

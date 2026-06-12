@@ -147,7 +147,10 @@ export async function POST(req: Request) {
     const contextText = answerNodes.length > 0
       ? answerNodes.map((match: any) => {
           const meta = match.metadata || {};
-          const ref = `[Perda No ${meta.number || '?'}/${meta.year || '?'}, Pasal ${meta.pasal || '?'}]`;
+          // Lampiran tariff nodes carry a roman-numeral number ("I.54", "II.12.1"), not an
+          // Arabic Pasal number — label them "Lampiran" so the model cites them correctly.
+          const label = meta.node_type === 'lampiran_tarif' ? 'Lampiran' : 'Pasal';
+          const ref = `[Perda No ${meta.number || '?'}/${meta.year || '?'}, ${label} ${meta.pasal || '?'}]`;
 
           const rawContent = match.content || match.content_text || '';
           const safeContent = rawContent.length > 2000
@@ -253,12 +256,20 @@ export async function POST(req: Request) {
           // a dead repealed_with_successor node. Greetings / "tidak ditemukan" cite nothing →
           // no card. Each source carries its `validity` for the UI to render deterministically.
           const citedPasals = Array.from(fullAnswer.matchAll(/Pasal\s*(\d+)/gi)).map(m => m[1]);
+          // Lampiran citations look like "Lampiran I.54" / "Lampiran II.12.1" (roman numeral,
+          // optionally dotted) — a separate shape from "Pasal N".
+          const citedLampiran = Array.from(fullAnswer.matchAll(/Lampiran\s+([IVXLC]+(?:\.\d+)*)/gi)).map(m => m[1]);
           const isCited = (m: any) => {
-            const pno = (m.metadata?.pasal || "").toString();
+            const meta = m.metadata || {};
+            const pno = (meta.pasal || "").toString();
+            if (meta.node_type === 'lampiran_tarif') {
+              // Exact ("I.54") or section-prefix ("Lampiran I" → any I.x) match.
+              return citedLampiran.some(cl => pno === cl || pno.startsWith(cl + "."));
+            }
             return citedPasals.some(cp => pno === cp || pno.startsWith(cp + " ") || pno.startsWith(cp + " ayat"));
           };
 
-          const heroSources = citedPasals.length > 0
+          const heroSources = (citedPasals.length > 0 || citedLampiran.length > 0)
             ? answerNodes.filter(isCited).slice(0, 3)
             : [];
 
@@ -276,13 +287,20 @@ export async function POST(req: Request) {
                 .slice(0, 3)
             : [];
 
-          const toSource = (m: any) => ({
+          // `role` distinguishes the answer-grounding source (hero) from a demoted "older
+          // version" reference. The gold harness keys its validity guard on this: a hero source
+          // must never be a repealed work (demoted refs legitimately are).
+          const toSource = (m: any, role: 'hero' | 'demoted') => ({
             content: m.content || m.content_text || '',
             metadata: m.metadata,
             validity: m.validity,
+            role,
           });
 
-          const finalSources = [...heroSources, ...demotedSources].map(toSource);
+          const finalSources = [
+            ...heroSources.map((m: any) => toSource(m, 'hero')),
+            ...demotedSources.map((m: any) => toSource(m, 'demoted')),
+          ];
           if (finalSources.length > 0) {
             send({ type: 'sources', data: finalSources });
           }

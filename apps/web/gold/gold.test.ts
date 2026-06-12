@@ -68,6 +68,23 @@ describe(`gold set @ ${BASE}`, () => {
         ).toBe(false);
       }
 
+      // 1.5) VALIDITY SAFETY (corpus-agnostic, runs for every case) — the real guard against
+      // dead-law-served-as-live, keyed on the source's validity state rather than brittle number
+      // strings. A hero source GROUNDS the answer, so it must never be a repealed work; a demoted
+      // source is the legitimate "older version" reference and is exempt. This catches a broken
+      // answer-safety partition that a `must_not_contain` digit regex would miss (or false-flag).
+      const REPEALED = ['repealed_with_successor', 'repealed_no_successor'];
+      const deadHero = sources.find(
+        (s) => s.role === 'hero' && REPEALED.includes(s.validity?.state ?? ''),
+      );
+      expect(
+        deadHero,
+        `Answer-grounding (hero) source is a REPEALED work for "${c.id}": ` +
+          `${deadHero?.metadata?.number}/${deadHero?.metadata?.year} ` +
+          `Pasal ${deadHero?.metadata?.pasal} (state=${deadHero?.validity?.state}).\n` +
+          `Dead law must never ground a live answer.\n${c.note}`,
+      ).toBeUndefined();
+
       // 2) GROUND TRUTH — only when the maintainer has authored it.
       if (
         isTodo(c.expected.work) ||
