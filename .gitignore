@@ -43,3 +43,4 @@ ocr_pipeline_log.txt
 data/raw_pdf/
 data/transcriptions/
 data/parsed/
+.gstack/
