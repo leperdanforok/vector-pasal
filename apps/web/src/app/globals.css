@@ -134,6 +134,7 @@
   /* Restrained brass/gold accent — the legal/institutional pairing */
   --vp-accent: #B0823F;
   --vp-accent-soft: #F2E9D7;
+  --vp-warning: #B45309;
   --vp-user-bubble: #136B4C;
   --vp-user-bubble-2: #0E5640;
   --vp-user-bubble-text: #FFFFFF;
@@ -215,6 +216,7 @@
   --vp-primary-glow: rgba(63, 203, 145, 0.18);
   --vp-accent: #D6A961;
   --vp-accent-soft: rgba(214, 169, 97, 0.14);
+  --vp-warning: #E8B262;
   --vp-user-bubble: #15583E;
   --vp-user-bubble-2: #0F4530;
   --vp-user-bubble-text: #E6FBF0;
@@ -612,6 +614,119 @@ article[id^="pasal-"] {
 .vp-source-btn:hover { opacity: 0.75; }
 .vp-source-open { color: var(--vp-text-dim); margin-left: auto; }
 .vp-source-open:hover { color: var(--vp-primary); opacity: 1; }
+
+/* ===== Validity treatments (consume source.validity; --vp-warning is the only new token) ===== */
+
+/* Status badge — icon + Indonesian label. Color reinforces; the label is the real signal (a11y). */
+.vp-validity-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 10px; font-weight: 800;
+  text-transform: uppercase; letter-spacing: 0.06em;
+  padding: 2px 7px; border-radius: 999px;
+  border: 1px solid transparent; white-space: nowrap;
+}
+.vp-validity-badge--md { font-size: 11.5px; padding: 3px 10px; }
+.vp-validity-badge.vp-validity--live    { color: var(--vp-primary); background: var(--vp-primary-light); border-color: color-mix(in srgb, var(--vp-primary) 28%, transparent); }
+.vp-validity-badge.vp-validity--repealed{ color: var(--vp-text-dim); background: color-mix(in srgb, var(--vp-text-dim) 12%, transparent); border-color: color-mix(in srgb, var(--vp-text-dim) 30%, transparent); }
+.vp-validity-badge.vp-validity--warning { color: var(--vp-warning); background: color-mix(in srgb, var(--vp-warning) 14%, transparent); border-color: color-mix(in srgb, var(--vp-warning) 45%, transparent); }
+.vp-validity-badge.vp-validity--info    { color: var(--vp-text-secondary); background: var(--vp-bg-tint); border-color: var(--vp-border); }
+
+/* live card keeps the default green .vp-source-card treatment */
+
+/* repealed_with_successor (demoted) — subordinate footnote; neutral, dimmed, dead body hidden */
+.vp-source-card--demoted {
+  border-left-color: var(--vp-text-dim);
+  background: color-mix(in srgb, var(--vp-text-dim) 6%, transparent);
+  opacity: 0.94;
+}
+.vp-source-card--demoted:hover { border-left-color: var(--vp-text-secondary); box-shadow: none; }
+.vp-source-card--demoted .vp-source-ref { color: var(--vp-text-secondary); font-weight: 600; }
+.vp-source-card--demoted .vp-source-pasal { font-size: 11px; color: var(--vp-text-dim); }
+.vp-source-superseded {
+  font-size: 11px; color: var(--vp-text-secondary);
+  margin: 2px 0 8px; font-style: italic;
+}
+
+/* Dead-content disclosure — hidden behind a notice; revealed body carries a DICABUT watermark */
+.vp-dead-notice {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 8px 10px; border-radius: var(--vp-radius-sm);
+  background: color-mix(in srgb, var(--vp-text-dim) 9%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--vp-text-dim) 35%, transparent);
+}
+.vp-dead-notice--modal { margin-bottom: 4px; }
+.vp-dead-notice-text {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--vp-text-secondary);
+}
+.vp-dead-toggle {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; font-weight: 700; color: var(--vp-text-secondary);
+  background: transparent; border: none; cursor: pointer; font-family: inherit;
+  padding: 4px 6px; min-height: 28px;
+}
+.vp-dead-toggle:hover { color: var(--vp-text); }
+.vp-dead-body {
+  position: relative; margin-top: 8px; padding: 12px 14px;
+  border-radius: var(--vp-radius-sm);
+  background: color-mix(in srgb, var(--vp-text-dim) 7%, transparent);
+  border: 1px solid var(--vp-border); overflow: hidden;
+  font-family: var(--font-newsreader), Georgia, serif;
+  font-size: 12.5px; line-height: 1.6; color: var(--vp-text-dim);
+  white-space: pre-wrap;
+}
+.vp-dead-body::after {
+  content: attr(data-watermark);
+  position: absolute; top: 6px; right: 10px;
+  font-family: var(--font-figtree), system-ui, sans-serif;
+  font-size: 10px; font-weight: 800; letter-spacing: 0.18em;
+  color: color-mix(in srgb, var(--vp-text-dim) 55%, transparent);
+  pointer-events: none;
+}
+
+/* repealed_no_successor — amber, gated behind "Saya paham" (the only gated state) */
+.vp-source-card--gated {
+  border: 1px solid var(--vp-warning);
+  border-left: 4px solid var(--vp-warning);
+  background: color-mix(in srgb, var(--vp-warning) 8%, transparent);
+}
+.vp-source-card--gated:hover { border-left-color: var(--vp-warning); }
+.vp-source-card--gated .vp-source-ref { color: var(--vp-warning); }
+.vp-ack-gate { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 2px; }
+.vp-ack-text {
+  display: flex; align-items: flex-start; gap: 7px;
+  font-size: 12.5px; line-height: 1.55; color: var(--vp-text-secondary);
+}
+.vp-ack-text svg { color: var(--vp-warning); margin-top: 1px; flex-shrink: 0; }
+.vp-ack-btn {
+  align-self: flex-start;
+  font-size: 12px; font-weight: 700; font-family: inherit;
+  color: #20160a; background: var(--vp-warning);
+  border: none; border-radius: var(--vp-radius-sm);
+  padding: 8px 16px; min-height: 40px; cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+.vp-ack-btn:hover { opacity: 0.88; }
+
+/* Card-less response notice (out_of_coverage / successor_unretrieved) */
+.vp-validity-notice {
+  margin-top: 12px; padding: 14px 16px;
+  border-radius: var(--vp-radius-sm);
+  background: var(--vp-bg-tint);
+  border: 1px solid var(--vp-border);
+  border-left: 4px solid var(--vp-text-secondary);
+}
+.vp-validity-notice-head {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--vp-text-secondary);
+}
+.vp-validity-notice-text { margin: 8px 0; font-size: 13px; line-height: 1.6; color: var(--vp-text); }
+.vp-validity-notice-foot {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 600; color: var(--vp-text-dim);
+}
+.vp-modal-badge-row { margin-top: 8px; }
 
 /* Typing indicator */
 .vp-typing {

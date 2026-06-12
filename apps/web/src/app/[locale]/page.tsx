@@ -3,55 +3,10 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-
-// ===== Icons (Lucide-style inline SVG) =====
-const ICON_PATHS: Record<string, string> = {
-  menu: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
-  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
-  'arrow-up': '<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>',
-  sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>',
-  moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
-  'book-open': '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>',
-  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
-  'file-text': '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8M16 13H8M16 17H8"/>',
-  'chevron-down': '<path d="m6 9 6 6 6-6"/>',
-  'chevron-up': '<path d="m18 15-6-6-6 6"/>',
-  'external-link': '<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
-  copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
-  check: '<path d="M20 6 9 17l-5-5"/>',
-  'check-check': '<path d="M18 6 7 17l-5-5"/><path d="m22 10-7.5 7.5L13 16"/>',
-  scale: '<path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z"/><path d="M7 21h10M12 3v18M3 7h2c2 0 5-1 7-2 2 1 5 2 7 2h2"/>',
-  'message-square': '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
-  'rotate-ccw': '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
-};
-
-function Icon({ name, size = 20, strokeWidth = 1.75, style }: { name: string; size?: number; strokeWidth?: number; style?: React.CSSProperties }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={strokeWidth}
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{ flexShrink: 0, display: 'inline-block', verticalAlign: 'middle', ...style }}
-      dangerouslySetInnerHTML={{ __html: ICON_PATHS[name] || '' }}
-    />
-  );
-}
-
-type Source = {
-  content: string;
-  metadata?: {
-    type?: string;
-    number?: string | number;
-    year?: string | number;
-    pasal?: string | number;
-    ayat?: string | number;
-  };
-};
+import { Icon } from '@/components/Icon';
+import { VPSourceCard } from '@/components/validity/SourceCard';
+import { DocumentModal } from '@/components/validity/DocumentModal';
+import type { Source } from '@/lib/validity-ui';
 
 type Message = {
   role: 'user' | 'ai';
@@ -59,44 +14,6 @@ type Message = {
   sources?: Source[];
   time?: string;
 };
-
-// ===== Source card =====
-function VPSourceCard({ source, onViewFull }: { source: Source; onViewFull: (s: Source) => void }) {
-  const [expanded, setExpanded] = useState(false);
-  const meta = source.metadata || {};
-  const type = meta.type === 'PERDA_KAB' ? 'Perda Kab.' : (meta.type || 'Perda');
-  const ref = `${type} No. ${meta.number ?? '?'}/${meta.year ?? '?'}`;
-  const pasalLabel = `Pasal ${meta.pasal ?? '?'}${meta.ayat ? ` Ayat (${meta.ayat})` : ''}`;
-  const isLong = source.content.length > 120;
-
-  return (
-    <div className="vp-source-card">
-      <div className="vp-source-header">
-        <span className="vp-source-ref">{ref}</span>
-        <span className="vp-source-dot">·</span>
-        <span className="vp-source-pasal">{pasalLabel}</span>
-      </div>
-      <div
-        className={`vp-source-text ${!expanded && isLong ? 'vp-source-truncated' : ''} ${isLong ? 'vp-clickable' : ''}`}
-        onClick={() => isLong && setExpanded(!expanded)}
-      >
-        {source.content}
-      </div>
-      <div className="vp-source-actions">
-        {isLong ? (
-          <button className="vp-source-btn" onClick={() => setExpanded(!expanded)}>
-            {expanded ? 'Tutup' : 'Selengkapnya'}
-            <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={12} />
-          </button>
-        ) : <span />}
-        <button className="vp-source-btn vp-source-open" onClick={() => onViewFull(source)}>
-          Buka Dokumen
-          <Icon name="external-link" size={12} />
-        </button>
-      </div>
-    </div>
-  );
-}
 
 const SUGGESTIONS = [
   'Berapa tarif pajak sarang burung walet?',
@@ -431,46 +348,7 @@ export default function Home() {
 
       {/* Document modal */}
       {selectedDocument && (
-        <div className="vp-modal-overlay" onClick={() => setSelectedDocument(null)}>
-          <div className="vp-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="vp-modal-header">
-              <div>
-                <h3 className="vp-modal-title">
-                  <Icon name="file-text" size={18} style={{ marginRight: 8 }} />
-                  Detail Dokumen
-                </h3>
-                {selectedDocument.metadata && (
-                  <p className="vp-modal-subtitle">
-                    {(selectedDocument.metadata.type === 'PERDA_KAB' ? 'Perda Kab.' : (selectedDocument.metadata.type || 'Perda'))}
-                    {' No. '}{selectedDocument.metadata.number ?? '?'}/{selectedDocument.metadata.year ?? '?'}
-                    {' · Pasal '}{selectedDocument.metadata.pasal ?? '?'}
-                    {selectedDocument.metadata.ayat ? ` Ayat (${selectedDocument.metadata.ayat})` : ''}
-                  </p>
-                )}
-              </div>
-              <button type="button" className="vp-modal-close" onClick={() => setSelectedDocument(null)}>
-                <Icon name="x" size={18} />
-              </button>
-            </div>
-            <div className="vp-modal-body vp-doc-body">{selectedDocument.content}</div>
-            <div className="vp-modal-footer">
-              <button
-                type="button"
-                className="vp-btn-ghost"
-                onClick={() => {
-                  if (navigator.clipboard?.writeText) {
-                    navigator.clipboard.writeText(selectedDocument.content);
-                  }
-                }}
-              >
-                <Icon name="copy" size={14} /> Salin
-              </button>
-              <button type="button" className="vp-btn-primary" onClick={() => setSelectedDocument(null)}>
-                Tutup
-              </button>
-            </div>
-          </div>
-        </div>
+        <DocumentModal source={selectedDocument} onClose={() => setSelectedDocument(null)} />
       )}
 
       {/* Guide modal */}
