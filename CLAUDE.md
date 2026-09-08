@@ -8,7 +8,7 @@ Vector Pasal — an AI legal-assistant RAG for **Satpol PP Kabupaten Bolaang Mon
 
 **Important: this repo is a fork of [pasal.id](https://pasal.id)** (a general Indonesian legal database) that has been narrowed to the Bolmong Satpol PP use case. Large portions of the original pasal.id codebase are **inactive leftovers** that haven't been removed yet. When making changes, first check whether the surface you're touching is Bolmong-active or leftover — see the map below — and confirm with the user before doing significant work in a leftover area.
 
-Cleanup is tracked in [VECTOR_PASAL_CLEANUP_PLAN.md](VECTOR_PASAL_CLEANUP_PLAN.md) (Phase 1 started, most of Phases 1–5 still TODO as of writing — the structural changes it proposes are *not yet applied*; the doc describes intent, not current state).
+A phased cleanup (services layer, demo isolation, MCP relocation) is planned but **not yet applied** — the current layout is the pre-cleanup state. The detailed plan lives in the maintainer's local working notes, not in the repo; ask if you need it.
 
 ## What's active vs. leftover
 
@@ -123,5 +123,5 @@ Web uses `NEXT_PUBLIC_SUPABASE_URL`; Python surfaces use `SUPABASE_URL`. Don't r
 
 - **Migrations are append-only and numbered.** Don't edit a shipped one — add a new one. Two pairs share a number prefix (`030_*`, `039_*`) — preserve that ordering when adding more.
 - **`localePrefix: "as-needed"`** means internal links must use the `next-intl` `Link` from [apps/web/src/i18n/routing.ts](apps/web/src/i18n/routing.ts) — raw `next/link` will mis-resolve EN routes.
-- **The cleanup plan is aspirational.** [VECTOR_PASAL_CLEANUP_PLAN.md](VECTOR_PASAL_CLEANUP_PLAN.md) describes a target architecture (services layer, demo isolation, MCP relocation) that is **not yet implemented**. The current directory layout is the pre-cleanup state.
-- **History docs are useful when something looks wrong.** [VECTOR_PASAL_PROJECT_KNOWLEDGE.md](VECTOR_PASAL_PROJECT_KNOWLEDGE.md) and [VECTOR_PASAL_OPTIMIZATION_REPORT.md](VECTOR_PASAL_OPTIMIZATION_REPORT.md) document past debugging journeys (the "Not Found" mystery, missing fines, SDK migration, v1.4 perf work). Check there before "fixing" a quirky-looking decision.
+- **The cleanup plan is aspirational.** A target architecture (services layer, demo isolation, MCP relocation) is planned but **not yet implemented**. The current directory layout is the pre-cleanup state.
+- **Some quirky-looking decisions have history behind them** (the "Not Found" mystery, missing fines, SDK migration, v1.4 perf work). The write-ups are in the maintainer's local working notes, not the repo — ask before "fixing" something that looks odd but deliberate.

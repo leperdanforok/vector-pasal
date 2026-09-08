@@ -43,3 +43,9 @@ ocr_pipeline_log.txt
 data/raw_pdf/
 data/transcriptions/
 data/parsed/
+
+# Internal working notes (kept local, not published in the repo)
+VECTOR_PASAL_CLEANUP_PLAN.md
+VECTOR_PASAL_OPTIMIZATION_REPORT.md
+VECTOR_PASAL_PROJECT_KNOWLEDGE.md
+handoff.md
