@@ -98,6 +98,17 @@ export default function Home() {
     const q = text.trim();
     if (!q || loading) return;
 
+    let sid: string | null = null;
+    try {
+      sid = sessionStorage.getItem('vp-session-id');
+      if (!sid) {
+        sid = crypto.randomUUID();
+        sessionStorage.setItem('vp-session-id', sid);
+      }
+    } catch {
+      sid = null; // private mode / storage disabled — log stays anonymous
+    }
+
     const userTime = getCurrentTime();
     // Send the prior turns so the assistant has conversation context (answers
     // follow-ups, greets only once). Keep it compact: last 8 turns, role+content.
@@ -111,7 +122,7 @@ export default function Home() {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: q, history }),
+        body: JSON.stringify({ query: q, history, sessionId: sid }),
       });
       if (!response.ok) throw new Error('Terjadi kesalahan.');
 
