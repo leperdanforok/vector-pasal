@@ -4,19 +4,19 @@
 
 **Goal:** Add consent-gated GA4 traffic analytics and a PII-scrubbed server-side log of chat questions in a queryable Supabase table.
 
-**Architecture:** Two independent layers. GA4 (via `@next/third-parties/google`) loads only after explicit consent and never receives query text — only a `chat_submitted` count event. Chat questions are scrubbed of obvious PII and inserted into a new `chat_logs` table from `api/chat/route.ts`, off the response critical path via Vercel `waitUntil`.
+**Architecture:** Two independent layers. GA4 (via `@next/third-parties/google`) loads only after explicit consent and never receives query text — only a `chat_submitted` count event. Chat questions are scrubbed of obvious PII and inserted into a new `chat_logs` table from `api/chat/route.ts`, off the response critical path via `after()` from `next/server`.
 
-**Tech Stack:** Next.js 16 App Router, TypeScript, vitest, Supabase (pgvector + pg_cron), `@next/third-parties`, `@vercel/functions`, Node `crypto`.
+**Tech Stack:** Next.js 16 App Router, TypeScript, vitest, Supabase (pgvector + pg_cron), `@next/third-parties`, Node `crypto`.
 
 **Spec:** `docs/superpowers/specs/2026-09-10-analytics-and-query-logging-design.md`
 
 ## Global Constraints
 
-- Migrations are append-only and numbered. Current highest is `059`; the new migration is `060_chat_logs.sql`. Never edit a shipped migration.
+- Migrations are append-only and numbered. Current highest on this branch is `068` (the validity-layer work added `060`–`068`); the new migration is `069_chat_logs.sql`. Never edit a shipped migration.
 - GA4 Measurement ID is `G-XZR2F6J99K`, read from env `NEXT_PUBLIC_GA_ID`. Never hardcode it in source.
 - Query text MUST NOT be sent to GA4 in any form. GA4 receives only a parameterless `chat_submitted` event.
 - The chat log insert MUST NOT be `await`ed on the request path and MUST NOT throw. A logging failure is `console.warn('[chat:log] ...')` and nothing else.
-- Use Vercel `waitUntil()` for the insert promise — a bare floating promise is not acceptable (Vercel freezes the function after the response).
+- Schedule the insert promise with `after()` from `next/server` (Next 16 native; delegates to Vercel `waitUntil` in prod, runs in `next dev`). A bare floating promise is not acceptable. (Supersedes the earlier `@vercel/functions` choice — no extra dependency.)
 - PII scrub is best-effort. Patterns: NIK (16 digits), NPWP, phone, email, name-after-title. NO vehicle-plate detection. NO general name detection.
 - `chat_logs` retention is 90 days.
 - `chat_logs` fields are exactly: `id, created_at, session_hash, query_raw, query_refined, response_state, pii_scrubbed`. Do not add cited-Pasal refs, latency, or full answer text.
@@ -163,7 +163,7 @@ git commit -m "feat: add best-effort PII scrub for chat query logging"
 ### Task 2: chat_logs table + retention migration
 
 **Files:**
-- Create: `packages/supabase/migrations/060_chat_logs.sql`
+- Create: `packages/supabase/migrations/069_chat_logs.sql`
 
 **Interfaces:**
 - Consumes: nothing.
@@ -181,10 +181,10 @@ select extname from pg_extension where extname = 'pg_cron';
 
 - [ ] **Step 2: Write the migration**
 
-Create `packages/supabase/migrations/060_chat_logs.sql`:
+Create `packages/supabase/migrations/069_chat_logs.sql`:
 
 ```sql
--- 060_chat_logs.sql
+-- 069_chat_logs.sql
 -- Server-side log of chat questions for "what are people asking" analysis.
 -- Written only by the service-role client from apps/web/src/app/api/chat/route.ts.
 -- Query text is PII-scrubbed before insert (apps/web/src/lib/pii-scrub.ts).
@@ -227,7 +227,7 @@ Expected: 7 columns in the listed order; one cron job (if pg_cron path).
 - [ ] **Step 4: Commit**
 
 ```bash
-git add packages/supabase/migrations/060_chat_logs.sql
+git add packages/supabase/migrations/069_chat_logs.sql
 git commit -m "feat(db): add chat_logs table with 90-day retention"
 ```
 
@@ -459,25 +459,23 @@ git commit -m "feat: add chat_logs writer with salted session hashing"
 ### Task 4: Wire logging into the chat route + frontend session id
 
 **Files:**
-- Modify: `apps/web/package.json` (add `@vercel/functions`)
 - Modify: `apps/web/src/app/api/chat/route.ts`
 - Modify: `apps/web/src/app/[locale]/page.tsx`
 
 **Interfaces:**
-- Consumes: `logChatQuery` from `@/lib/chat-log` (Task 3); `waitUntil` from `@vercel/functions`.
+- Consumes: `logChatQuery` from `@/lib/chat-log` (Task 3); `after` from `next/server`.
 - Produces: every chat POST writes one `chat_logs` row; POST body now accepts optional `sessionId: string`.
 
-- [ ] **Step 1: Add the dependency**
+- [ ] **Step 1: (no dependency needed)**
 
-Run: `cd apps/web && npm install @vercel/functions`
-Expected: `package.json` + lockfile updated.
+`after()` is native to Next 16 (`next/server`). No `npm install`. Skip straight to Step 2.
 
 - [ ] **Step 2: Add imports to the route**
 
 In `apps/web/src/app/api/chat/route.ts`, after the existing imports (top of file):
 
 ```ts
-import { waitUntil } from '@vercel/functions';
+import { after } from 'next/server';
 import { logChatQuery } from '@/lib/chat-log';
 ```
 
@@ -501,9 +499,7 @@ In `apps/web/src/app/api/chat/route.ts`, immediately after the line that logs
 before `// 5. Build the legal context`):
 
 ```ts
-waitUntil(
-  logChatQuery({ query, refinedQuery, responseState, sessionId }),
-);
+after(() => logChatQuery({ query, refinedQuery, responseState, sessionId }));
 ```
 
 - [ ] **Step 5: Manually verify the row is written**
@@ -562,8 +558,8 @@ Expected: pass and compile.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add apps/web/package.json apps/web/package-lock.json apps/web/src/app/api/chat/route.ts apps/web/src/app/[locale]/page.tsx
-git commit -m "feat: log chat queries to chat_logs via waitUntil"
+git add apps/web/src/app/api/chat/route.ts apps/web/src/app/[locale]/page.tsx
+git commit -m "feat: log chat queries to chat_logs after() the response"
 ```
 
 ---
@@ -576,7 +572,8 @@ git commit -m "feat: log chat queries to chat_logs via waitUntil"
 - Modify: `apps/web/src/app/layout.tsx`
 - Modify: `apps/web/next.config.ts` (CSP)
 - Modify: `apps/web/src/app/[locale]/page.tsx` (`chat_submitted` event)
-- Modify: `apps/web/.env` (document `NEXT_PUBLIC_GA_ID`)
+- Modify: `apps/web/.env.example` (tracked — add `NEXT_PUBLIC_GA_ID=` and `CHAT_LOG_SALT=`, empty)
+- Modify: `apps/web/.env` (local, gitignored — add real `NEXT_PUBLIC_GA_ID` + a dev `CHAT_LOG_SALT` so local verification works; NOT committed)
 
 **Interfaces:**
 - Consumes: `NEXT_PUBLIC_GA_ID` env var.
@@ -739,11 +736,19 @@ try {
 }
 ```
 
-- [ ] **Step 6: Document the env var**
+- [ ] **Step 6: Document / set the env vars**
 
-Add to `apps/web/.env` (and `.env.example` if present):
+`apps/web/.env.example` (tracked — committed): append
+```
+NEXT_PUBLIC_GA_ID=
+CHAT_LOG_SALT=
+```
+
+`apps/web/.env` (local, gitignored — NOT committed, but set it so controller live
+verification works): append
 ```
 NEXT_PUBLIC_GA_ID=G-XZR2F6J99K
+CHAT_LOG_SALT=dev-only-salt-change-in-prod
 ```
 
 - [ ] **Step 7: Manual verification**
@@ -766,9 +771,10 @@ Expected: clean.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add apps/web/package.json apps/web/package-lock.json apps/web/src/components/consent/AnalyticsGate.tsx apps/web/src/app/layout.tsx apps/web/next.config.ts apps/web/src/app/[locale]/page.tsx
+git add apps/web/package.json apps/web/package-lock.json apps/web/src/components/consent/AnalyticsGate.tsx apps/web/src/app/layout.tsx apps/web/next.config.ts apps/web/src/app/[locale]/page.tsx apps/web/.env.example
 git commit -m "feat: consent-gated GA4 analytics with chat_submitted event"
 ```
+(`.env` is gitignored — do not attempt to `git add` it.)
 
 ---
 
@@ -868,7 +874,7 @@ git commit -m "feat: add privacy policy page"
 - 90-day retention (pg_cron + Vercel Cron fallback) → Task 2 / Task 2b ✓
 - PII scrub module + patterns + exclusions → Task 1 ✓
 - `chat-log.ts` builder + writer + salted hash + never-throws → Task 3 ✓
-- `waitUntil` wiring in route → Task 4 Steps 2–4 ✓
+- `after()` wiring in route → Task 4 Steps 2–4 ✓
 - Frontend sessionId in body → Task 4 Step 6 ✓
 - Testing / done criteria → per-task manual + `npm run test` in Tasks 4, 5 ✓
 - Env docs (`NEXT_PUBLIC_GA_ID`, `CHAT_LOG_SALT`, `CRON_SECRET`) → Tasks 5, 3, 2b ✓
