@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { sendGAEvent } from '@next/third-parties/google';
 import { Icon } from '@/components/Icon';
 import { VPSourceCard } from '@/components/validity/SourceCard';
 import { DocumentModal } from '@/components/validity/DocumentModal';
@@ -165,6 +166,14 @@ export default function Home() {
             console.error('Error parsing NDJSON chunk', e);
           }
         }
+      }
+
+      try {
+        if (localStorage.getItem('vp-analytics-consent') === 'granted') {
+          sendGAEvent('event', 'chat_submitted');
+        }
+      } catch {
+        /* no consent / storage blocked — skip */
       }
     } catch {
       setMessages([...baseMessages, { role: 'ai', content: 'Maaf, terjadi kesalahan server.', time: getCurrentTime() }]);

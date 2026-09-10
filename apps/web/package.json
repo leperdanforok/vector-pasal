@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@google/genai": "^1.48.0",
+    "@next/third-parties": "^16.3.4",
     "@serwist/next": "^9.5.7",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.101.1",
