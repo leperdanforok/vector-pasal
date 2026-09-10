@@ -3,6 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import { GoogleGenAI } from '@google/genai'; // <-- NEW SDK IMPORT
 import { SYSTEM_INSTRUCTION, buildRefinementPrompt, buildUserPrompt } from '@/lib/prompt';
 import { tagValidity, classifyByValidity, decideAnswer, type ValidityInfo } from '@/lib/validity';
+import { after } from 'next/server';
+import { logChatQuery } from '@/lib/chat-log';
 
 // 1. Initialize Supabase (Using the Service Role Key for backend access)
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
@@ -62,7 +64,11 @@ async function withRetry<T>(
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { query, history } = body as { query: string; history?: ChatHistoryMessage[] };
+    const { query, history, sessionId } = body as {
+      query: string;
+      history?: ChatHistoryMessage[];
+      sessionId?: string;
+    };
 
     // 3. User Query Refinement & Embedding generation (Parallelized for P0)
     const refinementPrompt = buildRefinementPrompt(query);
@@ -205,6 +211,10 @@ export async function POST(req: Request) {
       ? `Aturan yang Anda tanyakan sudah tidak berlaku dan telah diperbarui oleh ${disposition.successorLabel}. Namun teks pasal penggantinya tidak berhasil saya tampilkan untuk pertanyaan ini. Mohon verifikasi langsung dengan Bagian Hukum Kabupaten Bolaang Mongondow.`
       : null;
     console.log(`Validity: live=${liveMatches.length} rs=${rsMatches.length} rn=${rnMatches.length} successorFetched=${successorMatches.length} -> responseState=${responseState}`);
+
+    // Fire-and-forget: log the (PII-scrubbed) query for analytics AFTER the response.
+    // Never awaited, never throws — a logging outage cannot affect an answer.
+    after(() => logChatQuery({ query, refinedQuery, responseState, sessionId }));
 
     // 5. Build the legal context for the AI from the ELIGIBLE nodes only (Token Trimmed).
     const contextText = answerNodes.length > 0

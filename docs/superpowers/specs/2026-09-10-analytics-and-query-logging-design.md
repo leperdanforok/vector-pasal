@@ -90,9 +90,9 @@ Without this, GA fails silently.
 
 ## Layer 2 — `chat_logs` (server-side semantic capture)
 
-### Migration `packages/supabase/migrations/060_chat_logs.sql`
+### Migration `packages/supabase/migrations/069_chat_logs.sql`
 
-(`059` is the current highest; `060` is next. Append-only.)
+(`068` is the current highest on this branch; `069` is next. Append-only.)
 
 ```sql
 create table if not exists chat_logs (
@@ -193,15 +193,16 @@ export async function logChatQuery(input: {
   });
   ```
 
-- Ensure completion without blocking the response using Vercel's `waitUntil`:
+- Ensure completion without blocking the response using `after()` from `next/server`
+  (Next 16 native — delegates to Vercel `waitUntil` in prod, runs inline in `next dev`):
 
   ```ts
-  import { waitUntil } from '@vercel/functions';
+  import { after } from 'next/server';
   // ...
-  waitUntil(logPromise);
+  after(() => logChatQuery({ query, refinedQuery, responseState, sessionId }));
   ```
 
-  (`@vercel/functions` is a new dep. A bare floating promise is NOT acceptable — Vercel
+  (No new dependency. A bare floating promise is NOT acceptable — Vercel
   freezes the function after the response and can kill it.)
 
 - `logChatQuery` is never `await`ed on the request path. A logging outage cannot affect
@@ -227,7 +228,7 @@ export async function logChatQuery(input: {
    `{ query, history, sessionId }`.
 2. `route.ts` runs refinement + embedding + retrieval + validity as today, computes
    `responseState`.
-3. `route.ts` calls `logChatQuery(...)` and hands the promise to `waitUntil()`.
+3. `route.ts` schedules `logChatQuery(...)` with `after()`.
    `logChatQuery` scrubs PII, hashes the session id, inserts one `chat_logs` row.
 4. The answer streams to the client unchanged.
 5. On stream completion the client fires `chat_submitted` to GA4 (only if consent granted).
@@ -265,7 +266,7 @@ export async function logChatQuery(input: {
 ## Files touched
 
 New:
-- `packages/supabase/migrations/060_chat_logs.sql`
+- `packages/supabase/migrations/069_chat_logs.sql`
 - `apps/web/src/lib/pii-scrub.ts`
 - `apps/web/src/lib/chat-log.ts`
 - `apps/web/src/lib/__tests__/pii-scrub.test.ts`
@@ -274,10 +275,10 @@ New:
 - possibly `apps/web/src/app/api/cron/purge-chat-logs/route.ts` (only if pg_cron unavailable)
 
 Modified:
-- `apps/web/package.json` (`@next/third-parties`, `@vercel/functions`)
+- `apps/web/package.json` (`@next/third-parties`)
 - `apps/web/src/app/layout.tsx` (consent-gated `<GoogleAnalytics>`)
 - `apps/web/next.config.ts` (CSP)
-- `apps/web/src/app/api/chat/route.ts` (`logChatQuery` + `waitUntil`)
+- `apps/web/src/app/api/chat/route.ts` (`logChatQuery` + `after()`)
 - `apps/web/src/app/[locale]/page.tsx` (sessionId in body, `chat_submitted` event)
 - `apps/web/vercel.json` (only if Vercel Cron fallback is used)
 - `.env` documentation (`NEXT_PUBLIC_GA_ID`, `CHAT_LOG_SALT`, maybe `CRON_SECRET`)
