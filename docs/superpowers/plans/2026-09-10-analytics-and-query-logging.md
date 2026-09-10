@@ -793,6 +793,7 @@ Create `apps/web/src/app/[locale]/privasi/page.tsx`:
 
 ```tsx
 import type { Metadata } from 'next';
+import { setRequestLocale } from 'next-intl/server';
 
 export const metadata: Metadata = { title: 'Kebijakan Privasi' };
 
@@ -826,6 +827,7 @@ export default async function PrivacyPage({
   params: Promise<{ locale: string }>;
 }) {
   const { locale } = await params;
+  setRequestLocale(locale);
   const t = locale === 'en' ? EN : ID;
   return (
     <article style={{ maxWidth: '68ch', margin: '0 auto', padding: '3rem 1.25rem' }}>
@@ -841,6 +843,10 @@ export default async function PrivacyPage({
   );
 }
 ```
+
+Note: `setRequestLocale(locale)` matches the sibling `[locale]` server pages
+(`jelajahi`, `topik`, `search`) and keeps the page statically renderable. No
+`generateStaticParams` needed here — `[locale]/layout.tsx` already provides it.
 
 - [ ] **Step 2: Verify**
 
