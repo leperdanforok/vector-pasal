@@ -14,6 +14,16 @@ describe('buildChatLogRow', () => {
     expect(row.response_state).toBe('live');
   });
 
+  it('scrubs PII from query_refined and reflects it in pii_scrubbed', () => {
+    const row = buildChatLogRow(
+      { query: 'pertanyaan umum', refinedQuery: 'KTP 3171234567890123 wajib?' },
+      'salt',
+    );
+    expect(row.query_raw).toBe('pertanyaan umum');
+    expect(row.query_refined).toBe('KTP [NIK] wajib?');
+    expect(row.pii_scrubbed).toBe(true);
+  });
+
   it('hashes the session id with the salt', () => {
     const row = buildChatLogRow({ query: 'x', sessionId: 'abc' }, 'pepper');
     expect(row.session_hash).toBe(

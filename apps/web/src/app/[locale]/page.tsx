@@ -7,6 +7,7 @@ import { sendGAEvent } from '@next/third-parties/google';
 import { Icon } from '@/components/Icon';
 import { VPSourceCard } from '@/components/validity/SourceCard';
 import { DocumentModal } from '@/components/validity/DocumentModal';
+import { CONSENT_STORAGE_KEY } from '@/lib/consent';
 import type { Source } from '@/lib/validity-ui';
 
 type Message = {
@@ -169,7 +170,7 @@ export default function Home() {
       }
 
       try {
-        if (localStorage.getItem('vp-analytics-consent') === 'granted') {
+        if (localStorage.getItem(CONSENT_STORAGE_KEY) === 'granted') {
           sendGAEvent('event', 'chat_submitted');
         }
       } catch {

@@ -21,7 +21,9 @@ export type ChatLogRow = {
 let warnedNoSalt = false;
 
 export function buildChatLogRow(input: ChatLogInput, salt: string | undefined): ChatLogRow {
-  const { text, scrubbed } = scrubPii(input.query ?? '');
+  const raw = scrubPii(input.query ?? '');
+  const refinedTrimmed = input.refinedQuery?.trim();
+  const refined = refinedTrimmed ? scrubPii(refinedTrimmed) : null;
   let sessionHash: string | null = null;
   if (input.sessionId && salt) {
     sessionHash = createHash('sha256').update(input.sessionId + salt).digest('hex');
@@ -31,10 +33,10 @@ export function buildChatLogRow(input: ChatLogInput, salt: string | undefined): 
   }
   return {
     session_hash: sessionHash,
-    query_raw: text,
-    query_refined: input.refinedQuery?.trim() || null,
+    query_raw: raw.text,
+    query_refined: refined ? refined.text : null,
     response_state: input.responseState?.trim() || null,
-    pii_scrubbed: scrubbed,
+    pii_scrubbed: raw.scrubbed || (refined?.scrubbed ?? false),
   };
 }
 

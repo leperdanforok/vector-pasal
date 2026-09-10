@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { GoogleAnalytics } from '@next/third-parties/google';
+import { CONSENT_STORAGE_KEY } from '@/lib/consent';
 
-const KEY = 'vp-analytics-consent';
 const CONSENT_COPY =
   'Situs ini memakai Google Analytics untuk memahami penggunaan layanan. Tidak ada isi pertanyaan Anda yang dikirim ke Google.';
 
@@ -13,18 +13,22 @@ export function AnalyticsGate({ gaId }: { gaId?: string }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect --
+       localStorage is client-only; hydrating it via an effect (not a lazy useState
+       initializer) is the SSR-safe pattern. The rule over-fires on this legit case. */
     try {
-      const v = localStorage.getItem(KEY);
+      const v = localStorage.getItem(CONSENT_STORAGE_KEY);
       if (v === 'granted' || v === 'denied') setChoice(v);
     } catch {
       /* storage disabled — show the bar, don't load GA */
     }
     setReady(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, []);
 
   const decide = (v: 'granted' | 'denied') => {
     try {
-      localStorage.setItem(KEY, v);
+      localStorage.setItem(CONSENT_STORAGE_KEY, v);
     } catch {
       /* ignore */
     }
@@ -38,7 +42,7 @@ export function AnalyticsGate({ gaId }: { gaId?: string }) {
       {choice === 'granted' && <GoogleAnalytics gaId={gaId} />}
       {choice === null && (
         <div
-          role="dialog"
+          role="region"
           aria-label="Persetujuan analitik"
           style={{
             position: 'fixed',
@@ -65,6 +69,7 @@ export function AnalyticsGate({ gaId }: { gaId?: string }) {
           </span>
           <span style={{ display: 'flex', gap: '0.5rem' }}>
             <button
+              type="button"
               onClick={() => decide('denied')}
               style={{
                 padding: '0.4rem 0.9rem',
@@ -78,6 +83,7 @@ export function AnalyticsGate({ gaId }: { gaId?: string }) {
               Tolak
             </button>
             <button
+              type="button"
               onClick={() => decide('granted')}
               style={{
                 padding: '0.4rem 0.9rem',
