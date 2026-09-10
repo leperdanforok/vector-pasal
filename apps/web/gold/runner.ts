@@ -40,6 +40,7 @@ const TRANSIENT_MARKERS = [
   'terjadi gangguan saat menghasilkan jawaban',
   'batas penggunaan API sedang penuh',
   'sistem tidak dapat menghasilkan jawaban',
+  'Sistem sedang sibuk',
   'pembatasan kutipan teks (RECITATION)',
   'diblokir oleh filter keamanan',
 ];

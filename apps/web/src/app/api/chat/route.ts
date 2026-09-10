@@ -19,6 +19,46 @@ export const maxDuration = 60;
 
 type ChatHistoryMessage = { role: 'user' | 'ai'; content: string };
 
+// --- Upstream-resilience helpers ----------------------------------------------------
+// Goal: survive peak-hour Gemini 503/UNAVAILABLE without masking real bugs.
+// `isUpstreamBusy` is intentionally narrow — only Gemini's "service unavailable"
+// signature is treated as retryable. 429 (quota) and other 4xx are NOT retried:
+// quota has a different remediation, and retrying a real bug would just hide it.
+const isUpstreamBusy = (err: any): boolean => {
+  const status = err?.status ?? err?.code;
+  if (status === 429) return false;
+  if (status === 503) return true;
+  const msg = String(err?.message ?? err ?? '');
+  return /\b503\b|UNAVAILABLE|Service Unavailable/i.test(msg);
+};
+
+const BUSY_MESSAGE = 'Sistem sedang sibuk, silakan coba lagi sebentar.';
+
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: { retries?: number; backoffMs?: number; label: string },
+): Promise<T> {
+  const retries = opts.retries ?? 2;
+  const backoffMs = opts.backoffMs ?? 500;
+  let lastErr: any;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      if (!isUpstreamBusy(err) || attempt === retries) throw err;
+      const delay = backoffMs * (attempt + 1);
+      console.warn(
+        `[chat:retry] ${opts.label} attempt ${attempt + 1}/${retries} failed ` +
+          `(status=${err?.status ?? err?.code ?? 'n/a'}, msg=${(err?.message ?? '').toString().slice(0, 120)}); ` +
+          `retrying in ${delay}ms`,
+      );
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 export async function POST(req: Request) {
   try {
     const body = await req.json();
@@ -27,23 +67,46 @@ export async function POST(req: Request) {
     // 3. User Query Refinement & Embedding generation (Parallelized for P0)
     const refinementPrompt = buildRefinementPrompt(query);
 
-    const [refinementResponse, embeddingResponse] = await Promise.all([
-      ai.models.generateContent({
+    // Refinement is NON-ESSENTIAL — fall back to the raw query on ANY error so an
+    // upstream hiccup never 503s the whole request. Not retried: retrying a
+    // non-essential call adds load for no user benefit.
+    const refinementPromise = ai.models
+      .generateContent({
         model: 'gemini-2.5-flash',
         contents: refinementPrompt,
-        config: { temperature: 0 }
-      }),
-      ai.models.embedContent({
-        model: 'gemini-embedding-001',
-        contents: query, // Use ORIGINAL query for embedding (fast path)
-        config: {
-          outputDimensionality: 768,
-          taskType: 'RETRIEVAL_QUERY',
-        }
+        config: { temperature: 0 },
       })
+      .catch((err: any) => {
+        console.warn(
+          `[chat:fallback] refinement failed ` +
+            `(status=${err?.status ?? err?.code ?? 'n/a'}, msg=${(err?.message ?? '').toString().slice(0, 120)}); ` +
+            `using raw query`,
+        );
+        return null;
+      });
+
+    // Embedding IS load-bearing — retry with short backoff on 503/UNAVAILABLE.
+    // If still failing after retries, propagate to the outer catch which streams
+    // the calm "sistem sibuk" message.
+    const embeddingPromise = withRetry(
+      () =>
+        ai.models.embedContent({
+          model: 'gemini-embedding-001',
+          contents: query, // Use ORIGINAL query for embedding (fast path)
+          config: {
+            outputDimensionality: 768,
+            taskType: 'RETRIEVAL_QUERY',
+          },
+        }),
+      { retries: 2, backoffMs: 500, label: 'embedding' },
+    );
+
+    const [refinementResponse, embeddingResponse] = await Promise.all([
+      refinementPromise,
+      embeddingPromise,
     ]);
 
-    const refinedQuery = refinementResponse.text?.trim() || query;
+    const refinedQuery = refinementResponse?.text?.trim() || query;
     console.log(`Refined Query: ["${query}"] -> ["${refinedQuery}"]`);
 
     if (!embeddingResponse.embeddings || embeddingResponse.embeddings.length === 0 || !embeddingResponse.embeddings[0].values) {
@@ -195,11 +258,20 @@ export async function POST(req: Request) {
         const runOnce = async (temperature: number) => {
           let answer = '';
           let blockReason = '';
-          const stream = await ai.models.generateContentStream({
-            model: 'gemini-2.5-flash',
-            contents,
-            config: { systemInstruction, temperature },
-          });
+          // RETRY BOUNDARY: only the stream-initiation call is retryable. A 503 here
+          // means no bytes were ever sent to the client → safe to retry. Once we
+          // enter the `for await` loop below, a failure MUST NOT retry — retrying
+          // after partial stream would duplicate text the user already saw.
+          const stream = await withRetry(
+            () =>
+              ai.models.generateContentStream({
+                model: 'gemini-2.5-flash',
+                contents,
+                config: { systemInstruction, temperature },
+              }),
+            { retries: 2, backoffMs: 500, label: 'generation' },
+          );
+          // ---- HARD STOP: no retry past this line. Mid-stream errors propagate. ----
           for await (const chunk of stream) {
             const finishReason = chunk.candidates?.[0]?.finishReason;
             if (finishReason && finishReason !== 'STOP' && finishReason !== 'MAX_TOKENS') {
@@ -307,14 +379,20 @@ export async function POST(req: Request) {
 
         } catch (err: any) {
           // Surface the real cause in server logs; show a specific, friendly note.
-          console.error("Stream error:", err?.status ?? err?.code ?? '', err?.message ?? err);
           const status = err?.status ?? err?.code;
+          const isBusy = isUpstreamBusy(err);
           const isQuota = status === 429 || /quota|rate.?limit|resource.?exhausted/i.test(String(err?.message ?? ''));
+          console.error(
+            `[chat:stream-error] status=${status ?? ''} busy=${isBusy} quota=${isQuota} ` +
+              `msg=${(err?.message ?? err ?? '').toString().slice(0, 200)}`,
+          );
           send({
             type: 'text',
-            data: isQuota
-              ? 'Maaf, batas penggunaan API sedang penuh. Mohon tunggu sebentar lalu coba lagi.'
-              : 'Maaf, terjadi gangguan saat menghasilkan jawaban. Silakan coba lagi.',
+            data: isBusy
+              ? BUSY_MESSAGE
+              : isQuota
+                ? 'Maaf, batas penggunaan API sedang penuh. Mohon tunggu sebentar lalu coba lagi.'
+                : 'Maaf, terjadi gangguan saat menghasilkan jawaban. Silakan coba lagi.',
           });
         }
 
@@ -331,10 +409,35 @@ export async function POST(req: Request) {
 
   } catch (error: any) {
     // Pre-stream failure (refinement, embedding, or Supabase RPC). Log the real
-    // cause; differentiate quota so the disconnect is diagnosable.
+    // cause; differentiate quota and upstream-busy so the disconnect is diagnosable.
     const status = error?.status ?? error?.code;
-    console.error("API Error:", status ?? '', error?.message ?? error);
+    const isBusy = isUpstreamBusy(error);
     const isQuota = status === 429 || /quota|rate.?limit|resource.?exhausted/i.test(String(error?.message ?? ''));
+    console.error(
+      `[chat:pre-stream-error] status=${status ?? ''} busy=${isBusy} quota=${isQuota} ` +
+        `msg=${(error?.message ?? error ?? '').toString().slice(0, 200)}`,
+    );
+
+    if (isBusy) {
+      // Stream the calm busy message as a normal assistant NDJSON turn so the UI
+      // renders it inline, NOT as a 500 error overlay. "Busy, retry" vs "broken".
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(JSON.stringify({ type: 'text', data: BUSY_MESSAGE }) + '\n'),
+          );
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'application/x-ndjson',
+          'Cache-Control': 'no-cache, no-transform',
+        },
+      });
+    }
+
     return NextResponse.json(
       {
         error: isQuota
