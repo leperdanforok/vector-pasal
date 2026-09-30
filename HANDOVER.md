@@ -1,5 +1,31 @@
 # Handover
 
+## 2026-09-30 (evening) — parkir-tarif diagnosis, search fix attempted + reverted
+
+The morning session's work (below) is committed and pushed as `59cb035`, so that open item is done. **Launch is 2026-10-01**, and the decision was no more search/DB changes before launch.
+
+### Gold status: 16/17
+- The only red case is `parkir-tarif`, a **documented finding**; the diagnosis is in the comment on the case in `apps/web/gold/cases.ts`.
+- 1/2024 Pasal 82 can't be retrieved by either path:
+  - **Vector:** outside the top 60. The node covers five service types (kesehatan, kebersihan, parkir, …), so its embedding is diluted.
+  - **FTS, AND match:** Pasal 82 never contains "retribusi", so it doesn't match.
+  - **FTS, OR candidates:** `search_legal_chunks` keeps `LIMIT 100` with **no ORDER BY**. About 425 OR candidates match and an arbitrary 100 survive, which don't include Pasal 82.
+  - **FTS, scoring:** OR-only rows are scored against the AND tsquery, so their fts_score is always 0.
+
+### Search fix attempt: reverted
+- **071** ranked the candidates before the LIMIT and scored OR-only rows against an OR tsquery.
+- It fixed `parkir-tarif` but regressed `walet-tarif` (Pasal 56), `narkotika-hotel` (Pasal 25) and `parkir-tarif-lampiran` (I.54).
+- **Production has been reverted.** The live function is 068's body again, confirmed by the maintainer in the SQL Editor.
+- Migration history:
+  - `071_search_rank_before_limit` is recorded as applied in Supabase.
+  - The revert was run as plain SQL, so **072 is not recorded as applied**. It's idempotent and identical to 068, so applying it later is harmless.
+  - Both files are in `packages/supabase/migrations/`.
+- **Post-launch:** these FTS bugs are real and still open. Investigate why the three cases dropped before trying again. Always test a candidate as a `pg_temp` function against the full gold set before applying it.
+
+### Misc
+- `scripts/ocr_test_gemini.py` was added to `.gitignore` (local test script).
+- There's a stray folder named `F:vector-pasaldocs` at the repo root, probably a path that lost its slashes. Check it and delete it.
+
 ## 2026-09-30 — Perbup ingest, gold expansion, embedding backfill
 
 Branch: `feat/analytics-query-logging` (nothing from this session is committed yet).
@@ -24,9 +50,9 @@ Branch: `feat/analytics-query-logging` (nothing from this session is committed y
 - **TODO tonight**: re-run `npm run test:gold` (from `apps/web`, with `npm run dev` running) and confirm `parkir-tarif` now returns Pasal 82.
 
 ### Open items
-- [ ] Re-run the gold suite (see above).
+- [x] Re-run the gold suite. Now 16/17; see the evening section above.
 - [ ] Confirm `expected.*` for the 12 new gold cases by reading each regulation. They're still `TODO(viddie)`; right now only the safety checks run for them.
 - [ ] **Validity step 2** (Definition of Done) for the new Perda 1/2021, 5/2024, 7/2025 and all 8 Perbup: read each Ketentuan Penutup and add edges through `load_to_supabase.py --seed-validity`. Known: Perbup 22/2022 repeals Perbup 30/2018; Perbup 22/2025 amends Perbup 3/2022 (not in corpus → `regulation_register`).
 - [ ] Get the correct Perbup 7/2025 (PBB-P2) source file and ingest it.
-- [ ] Commit this session's changes and open the PR (`gh` CLI is not installed; use the GitHub compare page).
+- [ ] Open the PR (committed and pushed as `59cb035`) (`gh` CLI is not installed; use the GitHub compare page).
 - [ ] Possible follow-up: `ayat` nodes are never embedded in any work (by design so far), and ayat sources show their own number as `pasal` (e.g. "Pasal 1" for ayat 1). Worth a look if citations seem off.

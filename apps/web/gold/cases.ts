@@ -59,6 +59,10 @@ export const goldCases: GoldCase[] = [
     id: 'parkir-tarif',
     // Scoped to on-street parking 2026-09-30: the bare "retribusi parkir" query is ambiguous
     // between Pasal 82 (tepi jalan umum, Jasa Umum) and Pasal 87 (luar badan jalan, Jasa Usaha).
+    // KNOWN RED (finding, 2026-09-30): Pasal 82 is not retrievable. Vector: it covers five
+    // service types in one node, so it ranks outside the top 60. FTS: it never says "retribusi"
+    // (fails the AND match), and search_legal_chunks' or_m keeps an arbitrary 100 of ~425 OR
+    // candidates (LIMIT without ORDER BY). Fix attempt 071 regressed 3 cases -> reverted (072).
     query: 'Bagaimana retribusi parkir di tepi jalan umum dihitung?',
     expected: { work: '1/2024', pasal: '82', validity_state: 'live' }, // CONFIRMED 2026-06-08
     // SAFETY MODEL CHANGED 2026-06-12 (Lampiran re-ingest): the primary dead-tariff guard is now
