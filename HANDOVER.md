@@ -2,7 +2,7 @@
 
 ## 2026-09-30 (evening) — parkir-tarif diagnosis, search fix attempted + reverted
 
-The morning session's work (below) is committed and pushed as `59cb035`, so that open item is done. **Launch is 2026-10-01**, and the decision was no more search/DB changes before launch.
+The morning session's work (below) is committed and pushed as `59cb035`, so that open item is done. **Launch is 2026-10-01.** The decision was no more search/DB changes before launch, and the branch was deployed to production at `40c7933` (see "Deployed to production").
 
 ### Gold status: 16/17
 - The only red case is `parkir-tarif`, a **documented finding**; the diagnosis is in the comment on the case in `apps/web/gold/cases.ts`.
@@ -21,6 +21,27 @@ The morning session's work (below) is committed and pushed as `59cb035`, so that
   - The revert was run as plain SQL, so **072 is not recorded as applied**. It's idempotent and identical to 068, so applying it later is harmless.
   - Both files are in `packages/supabase/migrations/`.
 - **Post-launch:** these FTS bugs are real and still open. Investigate why the three cases dropped before trying again. Always test a candidate as a `pg_temp` function against the full gold set before applying it.
+
+### Deployed to production
+- `feat/analytics-query-logging` @ `40c7933` is live on Vercel (`dpl_5DLByjKS9v4GRitFw35H2Cw79Wi3`, state READY, target production).
+- **Rollback:** the previous production deploy, `fb3128b` (`dpl_2XX6yRV2tVpXQi8ydUVzXbaXtAaH`), is the rollback candidate. Use Vercel → Deployments → ⋯ → Promote to Production.
+- What changed in the web app since `fb3128b`: only the maintenance-mode page and middleware toggle. `MAINTENANCE_MODE = false` in `apps/web/src/middleware.ts`; flip it, push, and redeploy to turn maintenance on.
+- **How deploys work here:**
+  - The Vercel project is linked to the GitHub repo but does **not** auto-deploy on push and posts no PR checks.
+  - Deploys are manual: Vercel → Deployments → Create Deployment → branch or commit.
+  - Production runs this branch. `main` is behind; merging the open PR into `main` just catches it up and doesn't deploy.
+- **Pre-deploy checks:**
+  - Unit tests: 66/66 pass.
+  - Gold suite: 16/17, with `parkir-tarif` a known red.
+  - Lint: 30 errors and 14 warnings, all `no-explicit-any` or `<img>` style issues with no runtime effect. Next 16 `next build` doesn't run lint. Clean up after launch.
+- **Launch caveat:** validity step 2 hasn't been done for the 11 new works. The two known relations point at regulations that aren't in the corpus (Perbup 30/2018, 3/2022), so they can't cause dead-law answers. Still unchecked: whether anything newer, outside the corpus, repeals or amends one of the 11. Check that first after launch.
+
+### Post-launch order
+1. Validity step 2, starting with the reverse check above.
+2. The `search_legal_chunks` ranking bug.
+3. Lint cleanup (`any` types, mostly in `api/chat/route.ts`).
+4. Fill `work`/`pasal` for the 12 new gold cases. `validity_state: 'live'` is already set, but the ground-truth check stays skipped until `work` and `pasal` are filled.
+5. Get the real Perbup 7/2025 (PBB-P2) file and ingest it.
 
 ### Misc
 - `scripts/ocr_test_gemini.py` was added to `.gitignore` (local test script).
@@ -54,5 +75,5 @@ Branch: `feat/analytics-query-logging` (nothing from this session is committed y
 - [ ] Confirm `expected.*` for the 12 new gold cases by reading each regulation. They're still `TODO(viddie)`; right now only the safety checks run for them.
 - [ ] **Validity step 2** (Definition of Done) for the new Perda 1/2021, 5/2024, 7/2025 and all 8 Perbup: read each Ketentuan Penutup and add edges through `load_to_supabase.py --seed-validity`. Known: Perbup 22/2022 repeals Perbup 30/2018; Perbup 22/2025 amends Perbup 3/2022 (not in corpus → `regulation_register`).
 - [ ] Get the correct Perbup 7/2025 (PBB-P2) source file and ingest it.
-- [ ] Open the PR (committed and pushed as `59cb035`) (`gh` CLI is not installed; use the GitHub compare page).
+- [x] PR opened. Production deploys don't depend on it; see "Deployed to production" above. (`gh` CLI is not installed; use the GitHub compare page).
 - [ ] Possible follow-up: `ayat` nodes are never embedded in any work (by design so far), and ayat sources show their own number as `pasal` (e.g. "Pasal 1" for ayat 1). Worth a look if citations seem off.
