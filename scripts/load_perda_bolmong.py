@@ -88,12 +88,12 @@ def main():
     )
     args = parser.parse_args()
 
-    # 1. Find all PDFs in your folder automatically
-    pdf_files = list(PDF_DIR.glob("*.pdf"))
-    print(f"=== Found {len(pdf_files)} PDFs in {PDF_DIR} ===\n")
+    # 1. Find all PDFs and DOCX files in your folder automatically
+    pdf_files = sorted(PDF_DIR.glob("*.pdf")) + sorted(PDF_DIR.glob("*.docx"))
+    print(f"=== Found {len(pdf_files)} files in {PDF_DIR} ===\n")
 
     if not pdf_files:
-        print("No PDFs found! Check your folder path.")
+        print("No PDF/DOCX files found! Check your folder path.")
         return
 
     # In-memory scope filter (never moves/mutates the corpus dir — crash-safe).
@@ -125,7 +125,7 @@ def main():
         if "PROV" in filename_upper:
             reg_type = "PERDA_PROV"
         elif "PERBUP" in filename_upper or "BUPATI" in filename_upper:
-            reg_type = "PERDA_KAB"
+            reg_type = "PERBUP_KAB"
 
         # Generate Slug & FRBR URI
         slug = pdf_path.stem.lower().replace(" ", "-").replace("_", "-")
