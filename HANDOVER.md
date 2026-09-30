@@ -45,7 +45,6 @@ The morning session's work (below) is committed and pushed as `59cb035`, so that
 
 ### Misc
 - `scripts/ocr_test_gemini.py` was added to `.gitignore` (local test script).
-- There's a stray folder named `F:vector-pasaldocs` at the repo root, probably a path that lost its slashes. Check it and delete it.
 
 ## 2026-09-30 — Perbup ingest, gold expansion, embedding backfill
 
