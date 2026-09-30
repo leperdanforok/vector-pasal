@@ -69,9 +69,56 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float] | None]:
                 time.sleep(wait)
             else:
                 print(f"   Embedding batch error: {e}")
-                return [None] * len(texts)
+                break
 
-    return [None] * len(texts)
+    # One bad text fails the whole batch call — retry individually so it
+    # costs one vector, not the entire batch.
+    if len(texts) == 1:
+        return [None]
+    print(f"   Falling back to per-text embedding for {len(texts)} texts...")
+    return [get_embeddings_batch([t])[0] for t in texts]
+
+
+EMBED_NODE_TYPES = ("pasal", "lampiran_tarif", "penjelasan_pasal", "penjelasan_umum", "preamble")
+
+
+def backfill_embeddings(sb) -> None:
+    """Embed existing document_nodes whose embedding is NULL."""
+    titles = {w["id"]: w["title_id"] for w in sb.table("works").select("id,title_id").execute().data}
+    missing = []
+    page = 0
+    while True:
+        rows = (
+            sb.table("document_nodes")
+            .select("id,work_id,node_type,number,content_text")
+            .is_("embedding", "null")
+            .in_("node_type", list(EMBED_NODE_TYPES))
+            .range(page * 1000, page * 1000 + 999)
+            .execute()
+            .data
+        )
+        missing += [r for r in rows if r.get("content_text") and len(r["content_text"].strip()) >= 20]
+        if len(rows) < 1000:
+            break
+        page += 1
+
+    print(f"=== Backfilling {len(missing)} nodes without embeddings ===")
+    done = 0
+    for start in range(0, len(missing), EMBEDDING_BATCH_SIZE):
+        batch = missing[start:start + EMBEDDING_BATCH_SIZE]
+        texts = [
+            f"[{titles.get(n['work_id'], '')}] {n['node_type'].capitalize()} {n['number']}: {n['content_text']}"
+            for n in batch
+        ]
+        for node, vector in zip(batch, get_embeddings_batch(texts)):
+            if vector is None:
+                print(f"   FAILED node {node['id']} (work {node['work_id']} {node['node_type']} {node['number']})")
+                continue
+            sb.table("document_nodes").update({"embedding": vector}).eq("id", node["id"]).execute()
+            done += 1
+        print(f"   -> embedded {done}/{len(missing)}")
+        time.sleep(1)
+    print(f"=== Backfill done: {done}/{len(missing)} ===")
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -86,7 +133,16 @@ def main():
              "(case-insensitive). Scopes a re-ingest to one Perda without "
              "touching the corpus directory.",
     )
+    parser.add_argument(
+        "--backfill-embeddings",
+        action="store_true",
+        help="Embed existing nodes whose embedding is NULL, then exit.",
+    )
     args = parser.parse_args()
+
+    if args.backfill_embeddings:
+        backfill_embeddings(get_sb())
+        return
 
     # 1. Find all PDFs and DOCX files in your folder automatically
     pdf_files = sorted(PDF_DIR.glob("*.pdf")) + sorted(PDF_DIR.glob("*.docx"))
