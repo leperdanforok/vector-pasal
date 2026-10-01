@@ -5,7 +5,7 @@ import { routing } from "./i18n/routing";
 const intlMiddleware = createMiddleware(routing);
 
 // Toggle and push to flip maintenance mode on/off (no env var / dashboard config needed).
-const MAINTENANCE_MODE = true;
+const MAINTENANCE_MODE = false;
 
 export default function middleware(request: NextRequest) {
   if (MAINTENANCE_MODE) {

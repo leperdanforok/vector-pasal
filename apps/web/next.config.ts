@@ -15,7 +15,10 @@ const withSerwist = withSerwistInit({
 
 const nextConfig: NextConfig = {
   experimental: {
-    turbopackFileSystemCacheForBuild: true,
+    // turbopackFileSystemCacheForBuild was disabled — its persistent cache intermittently
+    // dropped Node-runtime API routes (/api/chat, /api/v1/*) from the dev route tree, causing
+    // hard-to-debug 404s. Re-enable only if builds need it and the route-registration bug is
+    // confirmed fixed upstream.
     optimizePackageImports: ["lucide-react", "framer-motion"],
   },
   images: {
@@ -45,11 +48,11 @@ const nextConfig: NextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline'",
+              "script-src 'self' 'unsafe-inline' https://*.googletagmanager.com",
               "style-src 'self' 'unsafe-inline'",
               "font-src 'self'",
-              "img-src 'self' data: blob: https://*.supabase.co",
-              "connect-src 'self' https://*.supabase.co https://*.supabase.in",
+              "img-src 'self' data: blob: https://*.supabase.co https://*.google-analytics.com https://*.googletagmanager.com",
+              "connect-src 'self' https://*.supabase.co https://*.supabase.in https://*.google-analytics.com https://*.analytics.google.com https://*.googletagmanager.com",
               "frame-ancestors 'none'",
             ].join("; "),
           },

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Instrument_Serif, Instrument_Sans, JetBrains_Mono, Figtree, Newsreader } from "next/font/google";
 import { getLocale } from "next-intl/server";
 import { Analytics } from "@vercel/analytics/next";
+import { AnalyticsGate } from "@/components/consent/AnalyticsGate";
 import "./globals.css";
 
 const instrumentSerif = Instrument_Serif({
@@ -72,6 +73,7 @@ export default async function RootLayout({
       >
         {children}
         <Analytics />
+        <AnalyticsGate gaId={process.env.NEXT_PUBLIC_GA_ID} />
       </body>
     </html>
   );

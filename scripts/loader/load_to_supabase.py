@@ -71,6 +71,230 @@ def _normalize_markdown_for_parser(text: str) -> str:
     return text
 
 
+# ── Lampiran (tariff appendix) splitting ─────────────────────────────────────
+# Bolmong tariff appendices (Lampiran I/II/III) sit AFTER the penjelasan's
+# "II. PASAL DEMI PASAL" section. parse_penjelasan()'s pasal-demi-pasal splitter
+# runs to EOF, so the LAST penjelasan pasal swallows the entire appendix into one
+# giant `penjelasan_pasal` node (Perda 1/2024: node 498, 182k chars) -> one
+# embedding -> unrankable. We peel the appendix off the RAW markdown (before
+# heading prefixes are stripped) and turn every markdown heading into its own
+# `lampiran_tarif` node so each tariff table is independently retrievable.
+
+_MD_HEADING_LINE_RE = re.compile(r'^[ \t]*(#{1,6})[ \t]+(.+?)[ \t]*$', re.MULTILINE)
+_LAMPIRAN_HEADING_RE = re.compile(r'^[ \t]*#{1,6}[ \t]+LAMPIRAN\b', re.MULTILINE | re.IGNORECASE)
+_LAMPIRAN_TITLE_RE = re.compile(r'^LAMPIRAN[ \t]+([IVXLCDM]+|\d+)\b', re.IGNORECASE)
+# Per-Lampiran repetition of the Perda's own title — noise, not a section label.
+_LAMPIRAN_SUBTITLE_RE = re.compile(r'^PERATURAN\s+DAERAH\b', re.IGNORECASE)
+
+# Max chars for one lampiran_tarif node. Oversized nodes (a heading whose body is
+# one long table with no markdown sub-headings) get sub-split at bold in-table
+# label rows so each node stays rankable. 8k chars is a proxy for the ~2048-token
+# embedding window of gemini-embedding-001 (~4 chars/token); above it the tail of
+# the node is silently dropped at embed time.
+_LAMPIRAN_NODE_CAP = 8_000
+
+_TABLE_ROW_RE = re.compile(r'^[ \t]*\|.*\|[ \t]*$')
+_TABLE_SEP_RE = re.compile(r'^[ \t]*\|[ \t]*:?-{2,}.*\|[ \t]*$')
+# Currency value (24.000 / 204.000,00 / ,00) — present in data rows, absent in label rows.
+_CURRENCY_RE = re.compile(r'\d\.\d{3}|\d,\d{2}')
+
+
+def _is_boundary_row(line: str) -> bool:
+    """True for a bold in-table *label* row: contains ** and carries no tariff value.
+
+    Distinguishes section-label rows (`| | **Aspal Keras** | | | |`) from bold *data*
+    rows that happen to carry a price on the same line (those have a currency value).
+    """
+    return '**' in line and not _CURRENCY_RE.search(line)
+
+
+def _subsplit_table_section(raw_body: str, cap: int) -> list[tuple[str, str]] | None:
+    """Pack an oversized tariff-table body into <=cap chunks, cutting only at label rows.
+
+    Returns ``[(sub_label, sub_raw_body), ...]`` (each chunk re-attaches its table's
+    column header + separator so no row is orphaned), or ``None`` when it cannot split
+    safely: no table structure, no usable boundary, a single atomic group already over
+    cap, or nothing gained. The caller then keeps the original node and surfaces it.
+    """
+    lines = raw_body.split('\n')
+
+    # ── Identify table blocks: header row immediately followed by a :--- separator ──
+    blocks: list[dict] = []
+    i, n = 0, len(lines)
+    while i < n - 1:
+        if _TABLE_ROW_RE.match(lines[i]) and _TABLE_SEP_RE.match(lines[i + 1]):
+            j = i + 2
+            while j < n and lines[j].strip() and not (
+                _TABLE_ROW_RE.match(lines[j]) and j + 1 < n and _TABLE_SEP_RE.match(lines[j + 1])
+            ):
+                j += 1
+            blocks.append({"header": lines[i], "sep": lines[i + 1], "rows": lines[i + 2:j]})
+            i = j
+        else:
+            i += 1
+
+    if not blocks:
+        return None  # no table structure -> can't cut without slicing prose; surface it
+
+    # ── Atomic groups: a label row + the data rows until the next label/block end ──
+    groups: list[dict] = []  # {header, sep, label, rows}
+    for blk in blocks:
+        cur = {"header": blk["header"], "sep": blk["sep"], "label": "", "rows": []}
+        for row in blk["rows"]:
+            if _is_boundary_row(row):
+                if cur["rows"] or cur["label"]:
+                    groups.append(cur)
+                label = _MD_BOLD_RE.sub(r'\1', row)
+                label = ' '.join(c.strip() for c in label.split('|') if c.strip())
+                cur = {"header": blk["header"], "sep": blk["sep"], "label": label, "rows": [row]}
+            else:
+                cur["rows"].append(row)
+        if cur["rows"] or cur["label"]:
+            groups.append(cur)
+
+    def _chunk_len(header: str, sep: str, rows: list[str]) -> int:
+        return len(_normalize_markdown_for_parser('\n'.join([header, sep, *rows])).strip())
+
+    # A single atomic group over cap can't be split without slicing one sub-table -> refuse.
+    if any(_chunk_len(g["header"], g["sep"], g["rows"]) > cap for g in groups):
+        return None
+
+    # ── Greedy-pack consecutive same-block groups into <=cap chunks ────────────
+    chunks: list[tuple[str, str]] = []
+    cur_header = cur_sep = cur_label = ""
+    cur_rows: list[str] = []
+
+    def _flush() -> None:
+        if cur_rows:
+            chunks.append((cur_label, '\n'.join([cur_header, cur_sep, *cur_rows])))
+
+    for g in groups:
+        if not cur_rows:
+            cur_header, cur_sep, cur_label = g["header"], g["sep"], g["label"]
+            cur_rows = list(g["rows"])
+            continue
+        same_block = g["header"] == cur_header and g["sep"] == cur_sep
+        if same_block and _chunk_len(cur_header, cur_sep, cur_rows + g["rows"]) <= cap:
+            cur_rows.extend(g["rows"])
+        else:
+            _flush()
+            cur_header, cur_sep, cur_label = g["header"], g["sep"], g["label"]
+            cur_rows = list(g["rows"])
+    _flush()
+
+    return chunks if len(chunks) > 1 else None
+
+
+def _split_lampiran_sections(raw_md: str) -> tuple[str, list[dict]]:
+    """Peel a trailing LAMPIRAN appendix out of raw markdown into per-heading nodes.
+
+    Returns ``(text_without_lampiran, lampiran_nodes)``. ``text_without_lampiran``
+    flows into the normal normalize -> parse_structure path (so the penjelasan's
+    last pasal no longer swallows the appendix). ``lampiran_nodes`` is a list of
+    ``lampiran`` container nodes (one per "LAMPIRAN <roman>") whose children are
+    ``lampiran_tarif`` content nodes — one per markdown heading that has body text.
+
+    No LAMPIRAN heading -> returns ``(raw_md, [])`` unchanged. This makes it a safe
+    no-op for transcriptions without an appendix and for the born-digital PyMuPDF
+    path (no ``#`` headings).
+    """
+    m = _LAMPIRAN_HEADING_RE.search(raw_md)
+    if not m:
+        return raw_md, []
+
+    before = raw_md[: m.start()]
+    region = raw_md[m.start():]
+
+    # re.split with one 2-group heading pattern yields:
+    #   [pre, hashes, title, body, hashes, title, body, ...]
+    # 'pre' is empty here because the region starts at a heading.
+    parts = _MD_HEADING_LINE_RE.split(region)
+
+    containers: list[dict] = []
+    current: dict | None = None     # current lampiran container
+    breadcrumb: list[str] = []      # heading-only titles since the last emitted node
+    seq = 0                         # running index within the current container
+
+    for i in range(1, len(parts), 3):
+        title = _MD_BOLD_RE.sub(r'\1', parts[i + 1]).strip()
+        body = parts[i + 2] if i + 2 < len(parts) else ""
+        body_text = _normalize_markdown_for_parser(body).strip()
+
+        lam = _LAMPIRAN_TITLE_RE.match(title)
+        if lam:
+            current = {
+                "type": "lampiran",
+                "number": lam.group(1).upper(),
+                "heading": title,
+                "content": "",
+                "children": [],
+                "sort_order": 0,
+            }
+            containers.append(current)
+            breadcrumb = []
+            seq = 0
+            continue
+
+        if _LAMPIRAN_SUBTITLE_RE.match(title):
+            continue  # drop the repeated Perda-title subtitle line
+
+        if not body_text:
+            breadcrumb.append(title)   # group header — carry into the next body node
+            continue
+
+        full_title = " — ".join([*breadcrumb, title]) if breadcrumb else title
+        breadcrumb = []
+        seq += 1
+        roman = current["number"] if current else "0"
+        base_number = f"{roman}.{seq}"
+
+        # Retain the heading in content so topic words ("PARKIR", "KESEHATAN") reach
+        # FTS + the embedding (the embed contextualizer uses content, not the heading).
+        content = f"{full_title}\n{body_text}"
+        sink = current["children"] if current is not None else containers
+
+        # Oversized section (a heading whose body is one long table) -> sub-split at
+        # in-table bold label rows so every node stays within the embedding window.
+        chunks = None
+        if len(content) > _LAMPIRAN_NODE_CAP:
+            # Leave headroom for the (longer) per-chunk sub-title prefix.
+            chunks = _subsplit_table_section(body, cap=_LAMPIRAN_NODE_CAP - 300)
+
+        if chunks:
+            for k, (sub_label, sub_raw) in enumerate(chunks, start=1):
+                sub_title = f"{full_title} — {sub_label}" if sub_label else full_title
+                sub_body = _normalize_markdown_for_parser(sub_raw).strip()
+                sink.append({
+                    "type": "lampiran_tarif",
+                    "number": f"{base_number}.{k}",
+                    "heading": sub_title,
+                    "content": f"{sub_title}\n{sub_body}",
+                    "children": [],
+                    "sort_order": 0,
+                })
+        else:
+            sink.append({
+                "type": "lampiran_tarif",
+                "number": base_number,
+                "heading": full_title,
+                "content": content,
+                "children": [],
+                "sort_order": 0,
+            })
+
+    return before, containers
+
+
+def _count_lampiran_tarif(nodes: list[dict]) -> int:
+    """Count lampiran_tarif nodes in a (possibly nested) node list."""
+    total = 0
+    for n in nodes:
+        if n.get("type") == "lampiran_tarif":
+            total += 1
+        total += _count_lampiran_tarif(n.get("children", []))
+    return total
+
+
 def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
     """Extract text from PDF, correct OCR errors, parse structure.
 
@@ -91,11 +315,20 @@ def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
 
     text = None
     stats = {}
+    lampiran_nodes: list[dict] = []
 
     if transcription_path.exists():
         print(f"   [Found Transcription] Loading {transcription_path.name}")
-        text = transcription_path.read_text(encoding="utf-8")
-        text = _normalize_markdown_for_parser(text)
+        raw_md = transcription_path.read_text(encoding="utf-8")
+        # Peel the tariff appendix off the RAW markdown first (before heading
+        # prefixes are stripped) so each Lampiran table becomes its own node
+        # instead of being swallowed into the last penjelasan pasal.
+        body_md, lampiran_nodes = _split_lampiran_sections(raw_md)
+        if lampiran_nodes:
+            n_sections = _count_lampiran_tarif(lampiran_nodes)
+            print(f"   [Lampiran] Split appendix into {len(lampiran_nodes)} container(s), "
+                  f"{n_sections} tariff section node(s)")
+        text = _normalize_markdown_for_parser(body_md)
         stats = {"page_count": "?", "char_count": len(text), "source": "manual_transcription"}
     else:
         text, stats = extract_text_pymupdf(pdf_path)
@@ -106,6 +339,9 @@ def process_pdf(pdf_path: Path, metadata: dict) -> dict | None:
         text = correct_ocr_errors(text)
 
     nodes = parse_structure(text)
+    if lampiran_nodes:
+        # Append after the penjelasan so _flatten_tree's DFS sort_order places them last.
+        nodes.extend(lampiran_nodes)
     pasal_count = count_pasals(nodes)
     print(f"   Parsed: {len(nodes)} top-level nodes, {pasal_count} pasals")
 
@@ -247,7 +483,7 @@ def load_nodes_recursive(
             if result.data:
                 inserted_id = result.data[0]["id"]
 
-                if node_type in ("pasal", "preamble", "content", "aturan", "penjelasan_umum", "penjelasan_pasal"):
+                if node_type in ("pasal", "preamble", "content", "aturan", "penjelasan_umum", "penjelasan_pasal", "lampiran_tarif"):
                     pasal_nodes.append({
                         "node_id": inserted_id,
                         "number": number,
@@ -274,7 +510,7 @@ def load_nodes_recursive(
     return pasal_nodes
 
 
-_CONTENT_NODE_TYPES = ("pasal", "preamble", "content", "aturan", "penjelasan_umum", "penjelasan_pasal")
+_CONTENT_NODE_TYPES = ("pasal", "preamble", "content", "aturan", "penjelasan_umum", "penjelasan_pasal", "lampiran_tarif")
 
 
 def _flatten_tree(nodes: list[dict]) -> list[dict]:
@@ -457,9 +693,16 @@ def main():
                         help="Delete ALL existing data before loading")
     parser.add_argument("--dry-run", action="store_true",
                         help="Count what would be inserted without writing")
+    parser.add_argument("--seed-validity", action="store_true",
+                        help="Seed the Bolmong legal-validity relations + register, then exit")
     args = parser.parse_args()
 
     sb = get_sb()
+
+    if args.seed_validity:
+        seed_regulation_register(sb)
+        seed_bolmong_validity(sb)
+        return
 
     if args.force_reload:
         print("Force reload: clearing ALL existing data...")
@@ -569,6 +812,172 @@ def insert_relationships(sb):
             inserted += 1
 
     print(f"  Inserted {inserted} relationships")
+
+
+# --- Bolmong legal-validity seeding -----------------------------------------
+#
+# These relations are hand-verified legal data (sourced from each Perda's Ketentuan
+# Penutup). They drive the validity layer, so seeding MUST fail loud — a silent SKIP
+# on a URI typo would make the system quietly serve repealed law. Unlike the lenient
+# national-law `insert_relationships` above, every helper here RAISES on failure and
+# the seed asserts its expected row counts at the end.
+
+# FRBR URIs for the in-corpus works involved (must match works.frbr_uri exactly).
+_URI_WALET_2_2021 = "/akn/id/act/local/bolmong/peraturan-daerah-nomor-2-tahun-2021-tentang-pajak-sarang-burung-walet"
+_URI_PARKIR_4_2020 = "/akn/id/act/local/bolmong/peraturan-daerah-nomor-4-tahun-2020-tentang-retribusi-parkir-jalan"
+_URI_HKPD_1_2024 = "/akn/id/act/local/bolmong/peraturan-daerah-nomor-1-tahun-2024-tentang-pajak-dan-retribusi-daerah"
+
+# Known-but-absent regulations (no text in corpus) → regulation_register.
+_BOLMONG_REGISTER = [
+    {
+        "reg_type": "PERDA_KAB", "number": "20", "year": 2010,
+        "title": "Peraturan Daerah Kabupaten Bolaang Mongondow Nomor 20 Tahun 2010 tentang Retribusi Jasa Umum",
+        "lembaran_ref": "Lembaran Daerah Kabupaten Bolaang Mongondow Tahun 2010 Nomor 20",
+        "note": "Induk yang diubah oleh Perda 4/2020 (Parkir). Teks belum tersedia di korpus.",
+    },
+]
+
+# Work <-> work edges (both directions for repeal, per existing convention).
+_BOLMONG_WORK_EDGES = [
+    (_URI_HKPD_1_2024, _URI_WALET_2_2021, "mencabut"),
+    (_URI_WALET_2_2021, _URI_HKPD_1_2024, "dicabut_oleh"),
+    (_URI_HKPD_1_2024, _URI_PARKIR_4_2020, "mencabut"),
+    (_URI_PARKIR_4_2020, _URI_HKPD_1_2024, "dicabut_oleh"),
+]
+
+# Work -> register edges (target is a regulation_register entry, identified by key).
+_BOLMONG_REGISTER_EDGES = [
+    (_URI_PARKIR_4_2020, ("PERDA_KAB", "20", 2010), "mengubah"),
+]
+
+
+def seed_regulation_register(sb):
+    """Upsert the known-but-absent regulations into regulation_register (idempotent)."""
+    print("\nSeeding regulation_register...")
+    for entry in _BOLMONG_REGISTER:
+        sb.table("regulation_register").upsert(
+            entry, on_conflict="reg_type,number,year"
+        ).execute()
+        print(f"  OK: register {entry['reg_type']} {entry['number']}/{entry['year']}")
+
+
+def _work_id_by_uri(sb, uri: str) -> int:
+    res = sb.table("works").select("id").eq("frbr_uri", uri).execute()
+    if not res.data:
+        raise RuntimeError(f"Validity seed FAILED: work not found for FRBR URI {uri!r}")
+    return res.data[0]["id"]
+
+
+def _rel_type_id(sb, rel_code: str) -> int:
+    res = sb.table("relationship_types").select("id").eq("code", rel_code).execute()
+    if not res.data:
+        raise RuntimeError(f"Validity seed FAILED: relationship type {rel_code!r} not found")
+    return res.data[0]["id"]
+
+
+def _register_id(sb, reg_type: str, number: str, year: int) -> int:
+    res = (
+        sb.table("regulation_register").select("id")
+        .eq("reg_type", reg_type).eq("number", number).eq("year", year).execute()
+    )
+    if not res.data:
+        raise RuntimeError(
+            f"Validity seed FAILED: register entry not found for {reg_type} {number}/{year}"
+        )
+    return res.data[0]["id"]
+
+
+def upsert_register_relationship(sb, source_uri: str, register_key, rel_code: str) -> None:
+    """Strict: source work -> regulation_register edge. Raises on any resolution failure.
+
+    Uses check-then-insert (not upsert): the register uniqueness is enforced by a PARTIAL
+    unique index, which ON CONFLICT cannot infer from a column list.
+    """
+    reg_type, number, year = register_key
+    src_id = _work_id_by_uri(sb, source_uri)
+    reg_id = _register_id(sb, reg_type, number, year)
+    rel_id = _rel_type_id(sb, rel_code)
+
+    existing = (
+        sb.table("work_relationships").select("id")
+        .eq("source_work_id", src_id)
+        .eq("target_register_id", reg_id)
+        .eq("relationship_type_id", rel_id)
+        .execute()
+    )
+    if existing.data:
+        return  # idempotent
+
+    sb.table("work_relationships").insert(
+        {
+            "source_work_id": src_id,
+            "target_register_id": reg_id,
+            "relationship_type_id": rel_id,
+        }
+    ).execute()
+
+
+def upsert_work_relationship_strict(sb, source_uri: str, target_uri: str, rel_code: str) -> None:
+    """Strict: work -> work edge. Raises on any resolution failure (no silent SKIP)."""
+    sb.table("work_relationships").upsert(
+        {
+            "source_work_id": _work_id_by_uri(sb, source_uri),
+            "target_work_id": _work_id_by_uri(sb, target_uri),
+            "relationship_type_id": _rel_type_id(sb, rel_code),
+        },
+        on_conflict="source_work_id,target_work_id,relationship_type_id",
+    ).execute()
+
+
+def seed_bolmong_validity(sb):
+    """Seed the Bolmong repeal/amendment relations. Fails loud; asserts expected counts."""
+    print("\nSeeding Bolmong validity relations...")
+
+    for source_uri, target_uri, rel_code in _BOLMONG_WORK_EDGES:
+        upsert_work_relationship_strict(sb, source_uri, target_uri, rel_code)
+        print(f"  OK: {source_uri} -[{rel_code}]-> {target_uri}")
+
+    for source_uri, register_key, rel_code in _BOLMONG_REGISTER_EDGES:
+        upsert_register_relationship(sb, source_uri, register_key, rel_code)
+        print(f"  OK: {source_uri} -[{rel_code}]-> register {register_key[0]} {register_key[1]}/{register_key[2]}")
+
+    # Post-seed assertion: the validity layer must be complete, not partially seeded.
+    expected_work_edges = len(_BOLMONG_WORK_EDGES)        # 4
+    expected_register_edges = len(_BOLMONG_REGISTER_EDGES)  # 1
+    expected_register_rows = len(_BOLMONG_REGISTER)        # 1
+
+    work_edge_count = (
+        sb.table("work_relationships").select("id", count="exact")
+        .not_.is_("target_work_id", "null").execute().count
+    )
+    register_edge_count = (
+        sb.table("work_relationships").select("id", count="exact")
+        .not_.is_("target_register_id", "null").execute().count
+    )
+    register_row_count = (
+        sb.table("regulation_register").select("id", count="exact").execute().count
+    )
+
+    if work_edge_count < expected_work_edges:
+        raise RuntimeError(
+            f"Validity seed INCOMPLETE: {work_edge_count} work-edges present, "
+            f"expected at least {expected_work_edges}"
+        )
+    if register_edge_count < expected_register_edges:
+        raise RuntimeError(
+            f"Validity seed INCOMPLETE: {register_edge_count} register-edges present, "
+            f"expected at least {expected_register_edges}"
+        )
+    if register_row_count < expected_register_rows:
+        raise RuntimeError(
+            f"Validity seed INCOMPLETE: {register_row_count} register rows present, "
+            f"expected at least {expected_register_rows}"
+        )
+
+    print(
+        f"  Validity seed OK: {work_edge_count} work-edges, "
+        f"{register_edge_count} register-edges, {register_row_count} register rows"
+    )
 
 
 if __name__ == "__main__":

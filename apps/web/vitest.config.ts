@@ -1,10 +1,15 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig, configDefaults } from "vitest/config";
 import path from "path";
 
 export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "server-only": path.resolve(__dirname, "./src/test/server-only-stub.ts"),
     },
+  },
+  test: {
+    // The gold set is opt-in (network + Gemini); run it via `npm run test:gold`, never here.
+    exclude: [...configDefaults.exclude, "gold/**"],
   },
 });

@@ -69,9 +69,56 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float] | None]:
                 time.sleep(wait)
             else:
                 print(f"   Embedding batch error: {e}")
-                return [None] * len(texts)
+                break
 
-    return [None] * len(texts)
+    # One bad text fails the whole batch call — retry individually so it
+    # costs one vector, not the entire batch.
+    if len(texts) == 1:
+        return [None]
+    print(f"   Falling back to per-text embedding for {len(texts)} texts...")
+    return [get_embeddings_batch([t])[0] for t in texts]
+
+
+EMBED_NODE_TYPES = ("pasal", "lampiran_tarif", "penjelasan_pasal", "penjelasan_umum", "preamble")
+
+
+def backfill_embeddings(sb) -> None:
+    """Embed existing document_nodes whose embedding is NULL."""
+    titles = {w["id"]: w["title_id"] for w in sb.table("works").select("id,title_id").execute().data}
+    missing = []
+    page = 0
+    while True:
+        rows = (
+            sb.table("document_nodes")
+            .select("id,work_id,node_type,number,content_text")
+            .is_("embedding", "null")
+            .in_("node_type", list(EMBED_NODE_TYPES))
+            .range(page * 1000, page * 1000 + 999)
+            .execute()
+            .data
+        )
+        missing += [r for r in rows if r.get("content_text") and len(r["content_text"].strip()) >= 20]
+        if len(rows) < 1000:
+            break
+        page += 1
+
+    print(f"=== Backfilling {len(missing)} nodes without embeddings ===")
+    done = 0
+    for start in range(0, len(missing), EMBEDDING_BATCH_SIZE):
+        batch = missing[start:start + EMBEDDING_BATCH_SIZE]
+        texts = [
+            f"[{titles.get(n['work_id'], '')}] {n['node_type'].capitalize()} {n['number']}: {n['content_text']}"
+            for n in batch
+        ]
+        for node, vector in zip(batch, get_embeddings_batch(texts)):
+            if vector is None:
+                print(f"   FAILED node {node['id']} (work {node['work_id']} {node['node_type']} {node['number']})")
+                continue
+            sb.table("document_nodes").update({"embedding": vector}).eq("id", node["id"]).execute()
+            done += 1
+        print(f"   -> embedded {done}/{len(missing)}")
+        time.sleep(1)
+    print(f"=== Backfill done: {done}/{len(missing)} ===")
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -79,15 +126,41 @@ def get_embeddings_batch(texts: list[str]) -> list[list[float] | None]:
 def main():
     parser = argparse.ArgumentParser(description="Process Bolmong Regulations")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--only",
+        metavar="SUBSTR",
+        help="Only process PDFs whose filename contains this substring "
+             "(case-insensitive). Scopes a re-ingest to one Perda without "
+             "touching the corpus directory.",
+    )
+    parser.add_argument(
+        "--backfill-embeddings",
+        action="store_true",
+        help="Embed existing nodes whose embedding is NULL, then exit.",
+    )
     args = parser.parse_args()
 
-    # 1. Find all PDFs in your folder automatically
-    pdf_files = list(PDF_DIR.glob("*.pdf"))
-    print(f"=== Found {len(pdf_files)} PDFs in {PDF_DIR} ===\n")
+    if args.backfill_embeddings:
+        backfill_embeddings(get_sb())
+        return
+
+    # 1. Find all PDFs and DOCX files in your folder automatically
+    pdf_files = sorted(PDF_DIR.glob("*.pdf")) + sorted(PDF_DIR.glob("*.docx"))
+    print(f"=== Found {len(pdf_files)} files in {PDF_DIR} ===\n")
 
     if not pdf_files:
-        print("No PDFs found! Check your folder path.")
+        print("No PDF/DOCX files found! Check your folder path.")
         return
+
+    # In-memory scope filter (never moves/mutates the corpus dir — crash-safe).
+    if args.only:
+        needle = args.only.lower()
+        pdf_files = [p for p in pdf_files if needle in p.name.lower()]
+        print(f"=== --only '{args.only}' matched {len(pdf_files)} PDF(s): "
+              f"{[p.name for p in pdf_files]} ===\n")
+        if not pdf_files:
+            print(f"No PDFs match --only '{args.only}'. Aborting.")
+            return
 
     sb = None if args.dry_run else get_sb()
 
@@ -108,7 +181,7 @@ def main():
         if "PROV" in filename_upper:
             reg_type = "PERDA_PROV"
         elif "PERBUP" in filename_upper or "BUPATI" in filename_upper:
-            reg_type = "PERDA_KAB"
+            reg_type = "PERBUP_KAB"
 
         # Generate Slug & FRBR URI
         slug = pdf_path.stem.lower().replace(" ", "-").replace("_", "-")
