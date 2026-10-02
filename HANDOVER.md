@@ -1,5 +1,27 @@
 # Handover
 
+## 2026-10-02 — vector index dropped, gold 17/17
+
+### Finding: vector search was barely working
+- The embedding index on `document_nodes` was IVFFlat with `lists=100` over 754 vectors. At the default `probes=1` each query searched one cluster (~1% of the corpus), so `match_legal_chunks` returned 2–14 rows even for `match_count` 100.
+- None of the 5 confirmed gold nodes came back through the RPC. With the same stored vectors, an exact cosine search ranked them 1–7 (walet 2, sptpd 7, parkir-tarif 5, narkotika 1, lampiran I.54 1).
+- So the evening diagnosis below ("Pasal 82 embedding is diluted, outside the top 60") was wrong. The embedding was fine; the index dropped it. Every gold pass before today came mostly from FTS.
+
+### Fix: migration `073_drop_ivfflat_embedding_index.sql`
+- Drops the index, so vector search is an exact scan (~9 ms for 754 rows). Rationale and the HNSW trade-off are in the file header.
+- Applied by the maintainer in the SQL Editor (so, like 072, **not recorded as applied** in Supabase migration history; it's idempotent).
+- **Live in production now**: prod and dev share this DB.
+- Rollback: `CREATE INDEX document_nodes_embedding_idx ON public.document_nodes USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);`
+
+### Result
+- Gold before: 16/17 (`parkir-tarif` red). Gold after: **17/17**. `parkir-tarif` now cites 1/2024 Pasal 82.
+- The FTS bugs in `search_legal_chunks` (unordered `LIMIT 100`, OR-only rows scored 0) are still real, but no longer block any gold case. Lower priority now.
+
+### Next
+- Post-launch order item 2 is now "FTS ranking bug, lower priority". Validity step 2 is still first.
+- Planned and approved, not yet done: one shared embedding path in `load_perda_bolmong.py` + a fail-loud embedding coverage check (#3), then section-path prefixes in embedding text (#2), measured offline with exact ranks before any re-embed.
+- Dev gotcha hit today: Turbopack's dev cache dropped `/api/chat` (404 on GET and POST). Fix: stop dev, delete `apps/web/.next`, restart. The gold runner needs GET `/api/chat` → 405.
+
 ## 2026-09-30 (evening) — parkir-tarif diagnosis, search fix attempted + reverted
 
 The morning session's work (below) is committed and pushed as `59cb035`, so that open item is done. **Launch is 2026-10-01.** The decision was no more search/DB changes before launch, and the branch was deployed to production at `40c7933` (see "Deployed to production").
